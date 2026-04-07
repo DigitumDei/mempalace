@@ -1,8 +1,8 @@
-# Rust Migration Task Plan
+# Rust Rewrite Task Plan
 
 ## Purpose
 
-This document turns the Rust migration in `docs/RustMigration.md` into an execution plan.
+This document turns the Rust rewrite in `docs/RustMigration.md` into an execution plan.
 
 The emphasis here is:
 
@@ -30,7 +30,7 @@ It should also improve on the current Python version by making these explicit:
 
 - schema versions
 - embedding model choice
-- migration state
+- import state where optional interoperability is supported
 - ingestion idempotency
 - low-CPU deployment behavior
 
@@ -44,6 +44,7 @@ These rules should govern the whole rewrite.
 4. Integration tests must run against real local storage backends, not mocks alone.
 5. Performance and low-CPU budgets are part of definition-of-done, not a later optimization pass.
 6. A subsystem is not complete when it compiles. It is complete when its unit, integration, regression, and benchmark gates pass.
+7. Python goldens are only valid when produced from a pinned reference environment with pinned model assets and a documented warm-cache procedure.
 
 ## Test Suite Defined Up Front
 
@@ -73,6 +74,7 @@ Implementation approach:
 - create a frozen fixture corpus under `tests/fixtures/`
 - capture Python outputs into golden JSON or text snapshots
 - consume the same fixtures from Rust tests
+- add fixture-drift checks so regenerated Python goldens cannot silently replace the baseline without review
 
 ### 2. Unit Tests
 
@@ -199,21 +201,21 @@ Coverage:
 - structured shorthand rendering
 - token-budget-oriented output checks
 
-### 9. Migration Tests
+### 9. Optional Python Interop Tests
 
 Purpose:
 
-- safely move users from Python local state to Rust local state
+- verify optional import and inspection tooling without making Python-user migration a product requirement
 
 Coverage:
 
-- import existing palace state
+- inspect existing palace state
 - read legacy Chroma records
 - preserve metadata fields
 - rebuild embeddings where necessary
 - detect incompatible legacy state
-- dry-run migration reporting
-- resume interrupted migration
+- dry-run import reporting
+- resume interrupted import runs
 
 ### 10. Performance and Resource Tests
 
@@ -276,9 +278,14 @@ Before product implementation, build the harness:
 2. Fixture corpus copied from representative local project and conversation samples.
 3. Golden snapshot framework for text and JSON outputs.
 4. Temporary-database helpers for `SQLite` and `LanceDB`.
-5. Optional Python parity runner to regenerate fixtures when intentionally updating behavior.
-6. Benchmark harness for retrieval and low-CPU scenarios.
-7. CI matrix for normal and constrained profiles.
+5. Python parity runner that regenerates fixtures only from a pinned reference environment.
+6. Scripted warm-cache fixture-generation flow that pins:
+   - Python version
+   - `chromadb` version
+   - model identifier and asset checksum
+   - offline regeneration procedure after initial asset acquisition
+7. Benchmark harness for retrieval and low-CPU scenarios.
+8. CI matrix for normal and constrained profiles.
 
 Without this harness, the rewrite will drift.
 
@@ -296,7 +303,7 @@ Suggested crates:
 - `mempalace-dialect`
 - `mempalace-mcp`
 - `mempalace-cli`
-- `mempalace-migrate`
+- `mempalace-import`
 
 Each crate should own its tests, with cross-crate integration tests under a top-level `tests/` directory.
 
@@ -312,20 +319,31 @@ Goal:
 Tasks:
 
 1. Inventory all user-facing commands, MCP tools, and storage behaviors.
-2. Capture representative corpora:
+2. Evaluate the initial Rust MCP crate choice against explicit criteria:
+   - stdio transport support
+   - typed request/response surface
+   - maintenance activity
+   - ease of contract testing
+3. Capture representative corpora:
    - project repo fixture
    - conversation export fixture
    - mixed personal/project memory fixture
-3. Generate golden outputs from Python:
+4. Generate golden outputs from Python:
    - search results
    - wake-up output
    - AAAK output
    - graph outputs
-4. Define the official Rust profiles:
+5. Define the official Rust profiles:
    - `balanced`
    - `low_cpu`
    - `quality_first`
-5. Write acceptance criteria for each subsystem.
+6. Pin the Python reference environment for fixture generation:
+   - Python version
+   - `chromadb` version
+   - embedding model identifier
+   - model asset checksum or cached artifact source
+   - offline warm-cache regeneration procedure
+7. Write acceptance criteria for each subsystem.
 
 Tests to write first:
 
@@ -336,6 +354,8 @@ Tests to write first:
 Exit criteria:
 
 - fixtures committed
+- fixture-generation environment lock committed
+- MCP crate choice or fallback criteria committed
 - acceptance criteria written
 - parity vs divergence list approved
 
@@ -358,7 +378,11 @@ Tasks:
    - `EmbeddingProfile`
 3. Define error model and tracing setup.
 4. Define versioned config schema.
-5. Implement path resolution and local data directory logic.
+5. Lock embedding profile constants before storage work starts:
+   - `balanced = all-MiniLM-L6-v2`
+   - `balanced_dimension = 384`
+   - `low_cpu` model and dimension recorded explicitly
+6. Implement path resolution and local data directory logic.
 
 Tests first:
 
@@ -376,12 +400,14 @@ Exit criteria:
 
 - crates compile
 - foundational unit suite passes
+- embedding profile constants are committed and referenced by storage tests
 
 ## Phase 2: Storage Layer
 
 Goal:
 
 - replace Chroma with `LanceDB` and formalize operational state in `SQLite`
+- use embedding dimensions already locked in Phase 1 so the LanceDB schema is not guessed ad hoc
 
 Tasks:
 
@@ -424,7 +450,9 @@ Tasks:
 
 1. Define `EmbeddingProvider` trait.
 2. Implement initial backend with `fastembed`.
-3. Pin a default MiniLM-class model for `balanced`.
+3. Implement the already-pinned `balanced` model:
+   - `all-MiniLM-L6-v2`
+   - `384` dimensions
 4. Add `low_cpu` profile with a smaller model.
 5. Add config-driven model selection.
 6. Add model cache and startup validation behavior.
@@ -631,7 +659,7 @@ Tasks:
 3. Port init and mine flows.
 4. Port search output formatting.
 5. Port wake-up command.
-6. Add migration command for Python users.
+6. Port `split` or explicitly mark it deferred.
 
 Tests first:
 
@@ -650,36 +678,43 @@ Exit criteria:
 
 - CLI parity tests pass
 
-## Phase 10: Migration Tooling
+## Phase 10: Optional Python Interop Tooling
 
 Goal:
 
-- give existing Python users a safe path to Rust
+- support inspection or selective import of Python-era data without making it a release requirement
 
 Tasks:
 
 1. Implement legacy state inspection.
-2. Implement dry-run migration report.
+2. Implement dry-run import report.
 3. Implement Chroma-to-LanceDB conversion.
-4. Preserve or remap metadata fields explicitly.
-5. Implement resumable migrations.
-6. Implement post-migration verification report.
+4. If import is kept, cover all relevant Python-era persisted state explicitly:
+   - `config.json`
+   - `people_map.json`
+   - `entity_registry.json`
+   - onboarding-generated markdown artifacts
+   - `knowledge_graph.sqlite3`
+5. Preserve or remap metadata fields explicitly.
+6. Implement resumable import runs.
+7. Implement post-import verification report.
 
 Tests first:
 
-- migration fixture tests
-- interrupted migration resume tests
+- import fixture tests
+- interrupted import resume tests
 - data-count parity tests
 - metadata parity tests
+- fixture coverage for non-Chroma persisted state
 
 Pros vs Python:
 
-- gain a one-time clean storage model
-- lose the ease of simply reusing the old DB format forever
+- gain optional interoperability without coupling the Rust release to Python internals forever
+- lose some simplicity if you choose to support broad import coverage
 
 Exit criteria:
 
-- migration dry-run and real-run tests pass
+- interop tooling is either complete for all declared state or explicitly removed from the release scope
 
 ## Phase 11: Low-CPU Hardening for e2-micro
 
@@ -733,14 +768,14 @@ Tasks:
 
 1. Freeze CLI and config schemas.
 2. Run full regression and benchmark suite.
-3. Validate upgrade from Python state.
+3. Validate optional Python interop only if that feature remains in scope.
 4. Build packaging and release artifacts.
 5. Write operator docs for normal and low-CPU deployments.
 
 Required gates:
 
 - all unit and integration suites pass
-- migration suite passes
+- optional interop suite passes if shipped
 - benchmark thresholds met
 - low-CPU profile passes
 - no unowned parity gaps remain
@@ -753,7 +788,7 @@ These criteria apply across all phases.
 
 - Rust CLI can initialize, mine, search, wake up, and serve MCP locally.
 - Search results preserve meaningful parity with Python for representative fixtures.
-- Migration from Python local data is supported or explicitly deferred with a documented fallback.
+- Python-state import is optional and, if omitted, explicitly documented as out of scope for the first Rust release.
 
 ### Operational
 
@@ -799,7 +834,7 @@ Milestone 3:
 Milestone 4:
 
 - phases 10 to 12 complete
-- migration-ready release candidate
+- release candidate with optional interop settled
 
 ## Recommendation
 
@@ -811,6 +846,6 @@ The safest path is:
 2. build the Rust test harness first
 3. implement storage and embeddings before ingest
 4. make low-CPU constraints part of the plan from day one
-5. treat migration and benchmarks as core work, not cleanup work
+5. treat fixture reproducibility and benchmarks as core work, not cleanup work
 
-If this discipline is followed, the Rust rewrite becomes a controlled product migration instead of a speculative reimplementation.
+If this discipline is followed, the Rust rewrite becomes a controlled reimplementation instead of a speculative rewrite.

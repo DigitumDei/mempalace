@@ -1,4 +1,4 @@
-# Rust Migration Plan for MemPalace
+# Rust Rewrite Plan for MemPalace
 
 ## Purpose
 
@@ -14,6 +14,8 @@ The goal is not just "rewrite it in Rust." The goal is to preserve the product s
 - entity, room, and graph logic
 
 It also calls out where the Rust version should deliberately diverge from the Python design because the Python version is convenient but not ideal.
+
+This is not a commitment to migrate the existing Python user base. The Python app is the reference implementation and the source of many good product ideas, but the Rust effort should be treated as a sibling implementation or a selective reimplementation of the core ideas. Import or interoperability tooling can exist later, but it is optional rather than foundational.
 
 ## Executive Summary
 
@@ -36,13 +38,13 @@ Recommended storage split:
 
 That is a better long-term architecture than the current Python design, where Chroma is doing almost all content storage while SQLite is used only for the knowledge graph.
 
-## Migration Principles
+## Rewrite Principles
 
 1. Keep embeddings explicit.
    Python Chroma currently hides too much behind `query_texts` and default collection behavior. In Rust, make embedding generation a first-class subsystem.
 
 2. Separate operational metadata from retrieval data.
-   SQLite is better for manifests, migration state, per-file dedupe state, and temporal graphs. LanceDB is better for vector search and large text payloads.
+   SQLite is better for manifests, import state, per-file dedupe state, and temporal graphs. LanceDB is better for vector search and large text payloads.
 
 3. Preserve the user-facing product before optimizing the internals.
    A Rust rewrite should still feel like MemPalace: same commands, same "wing/room/drawer" model, same MCP tools, same offline-first posture.
@@ -94,14 +96,17 @@ Suggested workspace layout:
 ```text
 mempalace-rs/
   crates/
-    mempalace-core        # domain types, config, errors, ids
+    mempalace-core        # domain types, errors, ids
+    mempalace-config      # config loading, profile resolution, path rules
     mempalace-storage     # LanceDB + SQLite adapters
+    mempalace-embeddings  # embedding providers, model config, cache management
     mempalace-ingest      # project mining, convo mining, normalization
     mempalace-search      # retrieval, ranking, layer generation
     mempalace-graph       # KG + palace graph
     mempalace-dialect     # AAAK compression and rendering
     mempalace-mcp         # MCP server
     mempalace-cli         # CLI binary
+    mempalace-import      # optional Python-state import and inspection tools
 ```
 
 Benefits:
@@ -217,7 +222,7 @@ What that means in practice:
 
 - the app does not set an embedding function explicitly
 - Chroma chooses the default collection embedding behavior
-- the practical default today is local `all-MiniLM-L6-v2`
+- for recent Chroma releases, the practical default is usually local `all-MiniLM-L6-v2`
 - first run may trigger a model download
 - later embedding inference runs locally from the machine cache
 
@@ -312,8 +317,8 @@ Cons:
 
 Recommendation:
 
-- use this as the default `balanced` profile
-- strongest choice if you want migration with minimal retrieval drift
+- use explicit `all-MiniLM-L6-v2` at `384` dimensions as the initial `balanced` profile
+- strongest choice if you want the Rust app to start from Python-like retrieval behavior without inheriting Chroma's implicit defaults
 
 #### Option 2: BGE-small or other compact modern models
 
@@ -341,7 +346,7 @@ Cons:
 Recommendation:
 
 - a good `quality_first` option
-- not the first migration target if compatibility matters most
+- not the first rewrite target if compatibility with current Python behavior matters most
 
 #### Option 3: Very small models for constrained infrastructure
 
@@ -415,7 +420,7 @@ Cons:
 Recommendation:
 
 - good strategic option later
-- poor first move for a practical migration
+- poor first move for a practical rewrite
 
 ### Comparison with the Python Approach
 
@@ -449,7 +454,8 @@ What Rust loses:
 #### Profile A: Balanced default
 
 - backend: `fastembed`
-- model class: MiniLM-like 384-dimensional embedding model
+- model: explicit `all-MiniLM-L6-v2`
+- dimension: `384`
 - use case: laptop, desktop, or modest server
 
 Why:
@@ -498,7 +504,7 @@ What you lose:
 
 ## Low-CPU Deployment on e2-micro
 
-One of the most important constraints in this migration is the target machine. An `e2-micro` class VM changes the design materially.
+One of the most important constraints in this rewrite is the target machine. An `e2-micro` class VM changes the design materially.
 
 This is not just a performance concern. It affects:
 
@@ -536,7 +542,7 @@ For an `e2-micro`-friendly mode:
 
 - use a small local embedding model
 - reduce ingest concurrency to `1`
-- keep chunk sizes somewhat larger to reduce total embedding calls
+- keep chunk sizes only modestly larger, and only when measurements justify it
 - rely more on `wing` and `room` metadata prefilters before vector search
 - avoid secondary rerank passes unless explicitly enabled
 - cache query embeddings for repeated queries where appropriate
@@ -560,6 +566,7 @@ This shifts more retrieval quality burden onto:
 - lower-quality semantic embeddings if you choose a tiny model
 - less headroom for query reranking or fancy retrieval pipelines
 - greater sensitivity to bad chunking or noisy metadata
+- lower retrieval precision if chunk sizes are increased too aggressively to save CPU
 
 ### Comparison with the Python implementation
 
@@ -617,8 +624,8 @@ Use:
 
 Suggested config split:
 
-- global config in `~/.config/mempalace/config.toml` or preserve `~/.mempalace/config.json` for compatibility
-- project-local `mempalace.yaml` retained for easy migration
+- global config in `~/.config/mempalace/config.toml` or preserve `~/.mempalace/config.json` for operator familiarity
+- project-local `mempalace.yaml` retained if it remains the cleanest per-project override mechanism
 
 What Rust improves:
 
@@ -634,8 +641,9 @@ Possible downside:
 
 Recommendation:
 
-- preserve the existing config file shapes for v1 Rust compatibility
-- add a migration command later if you want to move to TOML
+- preserve the existing config file shapes if they are useful operationally
+- do not treat file-format compatibility as a release requirement for the Rust app
+- only add import or conversion helpers later if they materially reduce operator friction
 
 ## Project Mining
 
@@ -972,6 +980,7 @@ Recommendation:
 
 - implement the Rust MCP server after core storage and retrieval are stable
 - do not port the current single-file design directly
+- evaluate `rmcp` early, and if it proves unstable or under-maintained, fall back to whichever Rust MCP implementation best supports stdio transport, typed tool schemas, and robust integration testing
 
 ## Knowledge Graph
 
@@ -1318,11 +1327,11 @@ What improves:
 
 What does not automatically improve:
 
-- MCP exposure to hosted LLM clients
+- intentional MCP exposure to hosted LLM clients
 - user choice to ingest sensitive files
 - verbatim storage of private text
 
-So the storage rewrite is a sound engineering upgrade, but it is not itself a privacy boundary unless you also enforce local-only embedding and local-only model usage.
+The first item is an accepted product behavior, not an accidental flaw. If the Rust app keeps the same MCP-facing product shape, the trust model remains the same: local storage, but user-approved exposure to whichever LLM client is connected. The storage rewrite is still a sound engineering upgrade, but it is not itself a new privacy boundary unless you also enforce local-only embedding and local-only model usage.
 
 ## Gains and Losses by Major Choice
 
@@ -1374,7 +1383,7 @@ Loss:
 
 - more up-front design work
 
-## Suggested Migration Phases
+## Suggested Rewrite Phases
 
 ### Phase 1: Storage and Search Parity
 
@@ -1432,17 +1441,18 @@ Goal:
 
 - full tool-driven assistant integration
 
-### Phase 5: Compatibility and Migration Tooling
+### Phase 5: Compatibility and Import Tooling
 
 Build:
 
-- Chroma export/import bridge
-- config migration helpers
+- Python-state inspection helpers
+- optional Chroma export/import bridge
+- optional config conversion helpers
 - regression benchmark harness
 
 Goal:
 
-- safe production cutover
+- preserve useful interoperability without making Python-user migration a release gate
 
 ## Recommended First Rust MVP
 
