@@ -213,6 +213,29 @@ Tradeoffs:
 
 This is simple, but the actual embedding model and distance behavior are not controlled in application code.
 
+What that means in practice:
+
+- the app does not set an embedding function explicitly
+- Chroma chooses the default collection embedding behavior
+- the practical default today is local `all-MiniLM-L6-v2`
+- first run may trigger a model download
+- later embedding inference runs locally from the machine cache
+
+So the current Python implementation is close to "local embeddings by default," but it is still implicit and version-sensitive.
+
+Strengths of the current Python behavior:
+
+- minimal app code
+- no embedding pipeline to maintain
+- good default quality for general semantic search
+
+Weaknesses of the current Python behavior:
+
+- model choice is not visible in MemPalace config
+- startup behavior can include a network download
+- upgrades can change behavior indirectly through Chroma
+- hard to tune for constrained hardware
+
 ### Rust Recommendation
 
 Make embedding generation explicit:
@@ -228,22 +251,239 @@ Make embedding generation explicit:
    - vector search in LanceDB
    - optional rerank in app code
 
-Good embedding options:
+Recommended interface:
 
-- `fastembed`
-  - easiest local-first path
-  - good operational simplicity
-- `ort` with ONNX models
-  - more control
-  - heavier model/runtime management
-- `candle`
-  - best if you want a pure Rust ML direction
-  - more engineering effort
+```rust
+trait EmbeddingProvider {
+    fn model_id(&self) -> &'static str;
+    fn dimension(&self) -> usize;
+    fn embed_documents(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>>;
+    fn embed_query(&self, text: &str) -> anyhow::Result<Vec<f32>>;
+}
+```
 
-Recommended first version:
+That keeps the storage layer independent from the embedding backend and makes it possible to support different deployment profiles.
 
-- `fastembed` for MVP and early parity
-- keep the embedding provider behind a trait so it can be swapped later
+### Recommended Rust Default
+
+For the first Rust version, the best default is:
+
+- `LanceDB` for vector storage
+- explicit local embeddings
+- an `EmbeddingProvider` trait
+- `fastembed` as the initial backend
+- a pinned model selected in MemPalace config rather than by DB default
+
+This is a better long-term design than the Python version because the application, not the database wrapper, owns the embedding contract.
+
+### Rust Embedding Options
+
+There is no single best model for every deployment target. The right answer depends on whether you want:
+
+- closest behavior to current Python Chroma defaults
+- strongest retrieval quality
+- lowest CPU and RAM footprint
+- easiest packaging and reproducibility
+
+#### Option 1: MiniLM-class models for parity
+
+Examples:
+
+- `all-MiniLM-L6-v2`
+- other 384-dimensional MiniLM sentence embedding variants with ONNX support
+
+Best fit:
+
+- closest semantic behavior to the current Python setup
+- general-purpose retrieval across code, notes, and chats
+
+Pros:
+
+- best parity story with the current Python system
+- relatively small vectors
+- good quality per CPU cycle compared with larger models
+- easy to explain to users because it mirrors current behavior
+
+Cons:
+
+- still non-trivial CPU work on ingest
+- not ideal for a very weak always-on VM if ingest volume is high
+- model acquisition and packaging need to be owned explicitly
+
+Recommendation:
+
+- use this as the default `balanced` profile
+- strongest choice if you want migration with minimal retrieval drift
+
+#### Option 2: BGE-small or other compact modern models
+
+Examples:
+
+- compact BGE small English models
+- similar ONNX-exported small embedding models
+
+Best fit:
+
+- users who want somewhat more modern embedding quality and are willing to retune thresholds
+
+Pros:
+
+- can outperform older MiniLM-family defaults on some retrieval tasks
+- good ecosystem support
+- still small enough to run locally
+
+Cons:
+
+- less parity with the current Python system
+- can be slower or heavier than MiniLM depending on the exact model
+- may require more benchmark validation to avoid subtle regressions
+
+Recommendation:
+
+- a good `quality_first` option
+- not the first migration target if compatibility matters most
+
+#### Option 3: Very small models for constrained infrastructure
+
+Examples:
+
+- very small MiniLM-family models
+- aggressively compact ONNX sentence embedding models
+
+Best fit:
+
+- low-end cloud VMs
+- background services that must stay responsive under tiny CPU budgets
+
+Pros:
+
+- lowest CPU cost
+- faster query embedding
+- easier to keep latency bounded on a weak machine
+
+Cons:
+
+- weaker semantic recall
+- greater need for metadata filtering and chunk quality
+- more likely to miss subtle cross-document relationships
+
+Recommendation:
+
+- suitable as a dedicated `low_cpu` profile
+- not ideal as the universal default unless infrastructure constraints dominate quality
+
+#### Option 4: `ort` with directly managed ONNX models
+
+Best fit:
+
+- teams that want explicit model files, explicit runtime behavior, and direct control over loading
+
+Pros:
+
+- strongest control over packaging and reproducibility
+- clearer separation between application logic and model assets
+- easier to support multiple selectable local models
+
+Cons:
+
+- more engineering work than `fastembed`
+- more runtime management details to own
+- easier to make deployment awkward if packaging is sloppy
+
+Recommendation:
+
+- best long-term choice if model management becomes a first-class product concern
+- probably not necessary for the first parity release
+
+#### Option 5: `candle`
+
+Best fit:
+
+- teams committed to a broader Rust-native ML stack
+
+Pros:
+
+- strongest pure-Rust direction
+- less dependence on external inference runtimes over time
+
+Cons:
+
+- highest implementation effort
+- weakest path for "ship parity fast"
+- more likely to consume time in ML plumbing rather than product work
+
+Recommendation:
+
+- good strategic option later
+- poor first move for a practical migration
+
+### Comparison with the Python Approach
+
+Python today:
+
+- Chroma owns the default embedding choice
+- the app passes raw text and gets retrieval back
+- less code, but more hidden behavior
+
+Rust with explicit embeddings:
+
+- MemPalace owns the model choice
+- MemPalace embeds both documents and queries directly
+- more code, but better determinism, auditability, and deployment control
+
+What Rust gains:
+
+- explicit model pinning
+- predictable startup and offline guarantees
+- hardware-specific profiles
+- easier debugging when search quality changes
+
+What Rust loses:
+
+- convenience of implicit DB-managed embeddings
+- slightly longer setup path
+- a need for real benchmark discipline when switching models
+
+### Recommended Deployment Profiles
+
+#### Profile A: Balanced default
+
+- backend: `fastembed`
+- model class: MiniLM-like 384-dimensional embedding model
+- use case: laptop, desktop, or modest server
+
+Why:
+
+- closest practical replacement for the current Python behavior
+
+#### Profile B: Low CPU
+
+- backend: `fastembed` or `ort`
+- model class: smallest acceptable local embedding model that still clears benchmark targets
+- use case: `e2-micro`, always-on background service, or very low-cost personal VM
+
+Why:
+
+- optimizes for responsiveness and operating cost, not best retrieval quality
+
+#### Profile C: Quality first
+
+- backend: `ort`
+- model class: stronger compact local model, potentially BGE-small class
+- use case: workstation or larger VM where ingest time matters less than recall
+
+Why:
+
+- better ceiling for retrieval quality, at the cost of more tuning and packaging work
+
+### Recommendation
+
+The practical path is:
+
+- ship with a MiniLM-class model for parity
+- keep the provider trait stable
+- add a `low_cpu` profile for weak machines
+- benchmark both retrieval quality and ingest/query latency before changing the default model
 
 What you gain:
 
@@ -255,6 +495,97 @@ What you lose:
 
 - Chroma convenience
 - some short-term development speed
+
+## Low-CPU Deployment on e2-micro
+
+One of the most important constraints in this migration is the target machine. An `e2-micro` class VM changes the design materially.
+
+This is not just a performance concern. It affects:
+
+- which embedding model is realistic
+- whether ingest should be interactive or batch-oriented
+- whether reranking is affordable
+- how aggressive chunking and indexing can be
+- whether MCP search remains responsive under load
+
+### What an e2-micro target implies
+
+For this class of machine, assume:
+
+- CPU is the hard bottleneck
+- memory headroom is limited
+- cold starts and model loads matter
+- background indexing competes directly with interactive search
+
+This means the Rust design should not assume "embed everything eagerly with a medium model and rerank every query."
+
+### Recommended e2-micro strategy
+
+If `e2-micro` support is a real requirement, the best strategy is:
+
+1. Keep LanceDB, because the storage/query shape still fits the product well.
+2. Use SQLite for all manifests and metadata to minimize operational complexity.
+3. Make embeddings selectable by profile, with a dedicated `low_cpu` setting.
+4. Prefer smaller vectors and cheaper models over chasing maximum recall.
+5. Disable optional reranking by default on that profile.
+6. Batch ingest work and rate-limit it rather than embedding aggressively in the foreground.
+
+### Suggested low-CPU operating mode
+
+For an `e2-micro`-friendly mode:
+
+- use a small local embedding model
+- reduce ingest concurrency to `1`
+- keep chunk sizes somewhat larger to reduce total embedding calls
+- rely more on `wing` and `room` metadata prefilters before vector search
+- avoid secondary rerank passes unless explicitly enabled
+- cache query embeddings for repeated queries where appropriate
+
+This shifts more retrieval quality burden onto:
+
+- decent room classification
+- stable chunking
+- good metadata filters
+- careful ranking heuristics
+
+### What you gain on e2-micro
+
+- cheap always-on deployment
+- simple single-node local-first architecture
+- a realistic path to hosting personal memory infrastructure on minimal hardware
+
+### What you lose on e2-micro
+
+- slower ingest
+- lower-quality semantic embeddings if you choose a tiny model
+- less headroom for query reranking or fancy retrieval pipelines
+- greater sensitivity to bad chunking or noisy metadata
+
+### Comparison with the Python implementation
+
+The current Python system benefits from Chroma's convenience, but it does not express a hardware-aware embedding strategy. On stronger machines that is fine. On an `e2-micro`, it is a weakness.
+
+The Rust design can do better by making deployment intent explicit:
+
+- `balanced` profile for normal developer machines
+- `low_cpu` profile for tiny VMs
+- optional `quality_first` profile for larger systems
+
+That is a meaningful gain over the Python implementation because the resource tradeoffs stop being accidental.
+
+### Recommendation for this project
+
+If `e2-micro` is a real target, do not optimize only for parity with Chroma defaults.
+
+Instead:
+
+- keep MiniLM-class embeddings as the reference profile
+- add a smaller low-CPU model profile from the start
+- design ingest as resumable and batch-friendly
+- keep retrieval simple and metadata-aware
+- treat reranking as optional, not baseline
+
+That approach will preserve the product on weak hardware, even though it will give up some semantic quality compared with a less constrained machine.
 
 ## CLI and Configuration
 
