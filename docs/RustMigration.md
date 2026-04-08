@@ -66,6 +66,7 @@ The current codebase breaks down into these major pieces:
 3. Conversation mining and normalization
    - `mempalace/convo_miner.py`
    - `mempalace/normalize.py`
+   - `mempalace/spellcheck.py`
    - `mempalace/general_extractor.py`
 
 4. Retrieval and memory layers
@@ -82,10 +83,12 @@ The current codebase breaks down into these major pieces:
 7. Entity detection, registry, onboarding
    - `mempalace/entity_detector.py`
    - `mempalace/entity_registry.py`
+   - `mempalace/room_detector_local.py`
    - `mempalace/onboarding.py`
 
 8. AAAK dialect and compression
    - `mempalace/dialect.py`
+   - `mempalace/split_mega_files.py`
 
 The Rust port should keep these as separate crates or at least separate modules. That will make the rewrite incremental and testable.
 
@@ -160,12 +163,16 @@ struct DrawerRecord {
     wing: String,
     room: String,
     hall: Option<String>,
+    date: Option<time::Date>,
     source_file: String,
     chunk_index: i32,
     ingest_mode: String,
     extract_mode: Option<String>,
     added_by: String,
-    filed_at: String,
+    filed_at: time::OffsetDateTime,
+    importance: Option<f32>,
+    emotional_weight: Option<f32>,
+    weight: Option<f32>,
     content: String,
     content_hash: String,
     embedding: Vec<f32>,
@@ -181,6 +188,12 @@ Suggested SQLite tables:
 - `kg_entities`
 - `kg_triples`
 - `tool_state`
+
+Important parity note:
+
+- `date` is required if the Rust graph wants parity with `palace_graph.py`.
+- `importance`, `emotional_weight`, and `weight` are required if Layer 1 ranking should preserve the current metadata-based weighting behavior in `layers.py`.
+- `filed_at` should be a real timestamp type, not a free-form string, because recency ranking and ingest bookkeeping depend on it.
 
 How it compares:
 
@@ -206,6 +219,26 @@ Tradeoffs:
 - you must own embedding generation
 - filtering semantics and ranking behavior need explicit implementation and validation
 
+### Cross-Store Consistency Contract
+
+The Rust plan introduces a real dual-write hazard because drawer rows live in `LanceDB` while ingest manifests, hashes, and graph state live in `SQLite`.
+
+The rewrite should therefore adopt an explicit contract:
+
+1. Create a SQLite ingest run with status `pending`.
+2. Predeclare the deterministic chunk ids expected for that run in SQLite.
+3. Upsert those chunk ids into LanceDB.
+4. Mark the SQLite rows `committed` only after the LanceDB write succeeds.
+
+Recovery rule:
+
+- SQLite is the source of truth for whether an ingest run completed.
+- On startup, scan for stale `pending` ingest runs.
+- Delete LanceDB rows whose ids are not present in committed SQLite manifest rows.
+- Mark incomplete SQLite runs failed and eligible for retry.
+
+Without this rule, idempotency and dedupe claims are not trustworthy.
+
 ## Embeddings and Semantic Search
 
 ### Python Today
@@ -222,11 +255,11 @@ What that means in practice:
 
 - the app does not set an embedding function explicitly
 - Chroma chooses the default collection embedding behavior
-- for recent Chroma releases, the practical default is usually local `all-MiniLM-L6-v2`
+- in a pinned reference environment today, that will often resolve to a local `all-MiniLM-L6-v2` path, but that is a library default rather than an app-level guarantee
 - first run may trigger a model download
 - later embedding inference runs locally from the machine cache
 
-So the current Python implementation is close to "local embeddings by default," but it is still implicit and version-sensitive.
+So the current Python implementation is close to "local embeddings by default," but it is still implicit, version-sensitive, and unsuitable as an unpinned contract.
 
 Strengths of the current Python behavior:
 
@@ -449,6 +482,19 @@ What Rust loses:
 - slightly longer setup path
 - a need for real benchmark discipline when switching models
 
+### Embedding Dimension and Profile Locking
+
+Embedding dimension is part of the storage contract.
+
+That means:
+
+- `balanced` is explicitly pinned to `all-MiniLM-L6-v2` at `384` dimensions
+- the active table schema records its expected vector dimension
+- startup validation fails loudly if the configured query model dimension differs from the stored table dimension
+- switching embedding profiles on an existing corpus requires a full reindex or a separate table namespace
+
+Dimension mismatch is not graceful degradation. It is a hard compatibility failure.
+
 ### Recommended Deployment Profiles
 
 #### Profile A: Balanced default
@@ -524,6 +570,12 @@ For this class of machine, assume:
 - background indexing competes directly with interactive search
 
 This means the Rust design should not assume "embed everything eagerly with a medium model and rerank every query."
+
+Deployment cost note:
+
+- `fastembed` is attractive for parity and developer speed, but it brings ONNX Runtime plus local model assets into the package and memory footprint.
+- On a `1 GB` machine, cold-start model loads and transient resident-memory spikes matter.
+- If `low_cpu` is a real product profile, those runtime costs must be treated as design constraints, not left to later tuning.
 
 ### Recommended e2-micro strategy
 
@@ -608,10 +660,15 @@ The CLI in `cli.py` is thin and imperative:
 - `status`
 - `compress`
 
-Configuration is read from:
+Configuration and local state are read from:
 
 - env vars
 - `~/.mempalace/config.json`
+- `~/.mempalace/people_map.json`
+- `~/.mempalace/entity_registry.json`
+- `~/.mempalace/aaak_entities.md`
+- `~/.mempalace/critical_facts.md`
+- `~/.mempalace/knowledge_graph.sqlite3`
 - project-local `mempalace.yaml`
 
 ### Rust Recommendation
@@ -641,8 +698,9 @@ Possible downside:
 
 Recommendation:
 
-- preserve the existing config file shapes if they are useful operationally
-- do not treat file-format compatibility as a release requirement for the Rust app
+- preserve the existing file shapes only where they remain operationally useful
+- do not treat Python-state compatibility as a release requirement for the Rust app
+- if optional import tooling is ever shipped, scope it explicitly across all declared Python-era state rather than only the Chroma drawers
 - only add import or conversion helpers later if they materially reduce operator friction
 
 ## Project Mining
@@ -654,8 +712,8 @@ Recommendation:
 - walks project files
 - skips common directories
 - filters readable extensions
-- chunks content by fixed char windows with overlap
-- heuristically routes files to a room
+- chunks content by boundary-aware windows with overlap
+- heuristically routes files to a room, with separate local room-detection support also living in `room_detector_local.py`
 - stores verbatim chunks as drawers
 - uses `source_file` existence as the main idempotency check
 
@@ -668,7 +726,7 @@ Strengths:
 Weaknesses:
 
 - dedupe is weak
-- chunking is char-count based
+- chunking is still simple and window-based even though it does try paragraph and line boundaries before falling back
 - file state tracking is primitive
 - room detection is heuristic-only and not reusable enough
 
@@ -714,7 +772,7 @@ What you lose:
 
 ### Chunking Strategy
 
-The Python chunker is workable but crude.
+The Python chunker is workable and more boundary-aware than a pure fixed-window splitter, but it is still intentionally simple.
 
 Recommended Rust upgrade:
 
@@ -725,6 +783,19 @@ Recommended Rust upgrade:
 Suggested trait:
 
 ```rust
+struct SourceDocument {
+    source_file: String,
+    content: String,
+    media_type: MediaType,
+}
+
+struct Chunk {
+    content: String,
+    chunk_index: i32,
+    room_hint: Option<String>,
+    metadata: std::collections::BTreeMap<String, String>,
+}
+
 trait Chunker {
     fn chunk(&self, input: &SourceDocument) -> Vec<Chunk>;
 }
@@ -756,6 +827,7 @@ Cons:
 - normalizes each file
 - chunks by exchange pair or general extractor mode
 - heuristically assigns rooms
+- stores text that may already include user-turn spellcheck mutation from `spellcheck.py`
 
 Strengths:
 
@@ -767,6 +839,7 @@ Weaknesses:
 - parsers are somewhat ad hoc
 - little schema validation
 - mixed concerns between parse, normalize, classify, and store
+- the "verbatim" promise is not literal at normalization time because user turns can be corrected before storage
 
 ### Rust Recommendation
 
@@ -775,7 +848,7 @@ Break this into four layers:
 1. `importers`
    - parse known export formats into typed message structs
 2. `normalizers`
-   - canonical transcript form
+   - canonical transcript form, including any intentionally preserved text mutations
 3. `extractors`
    - exchange chunks, general memory extraction, future plugins
 4. `ingest writers`
@@ -812,6 +885,7 @@ What you lose:
 Recommendation:
 
 - preserve the exact currently supported formats first
+- make spellcheck-altered transcript behavior explicit in parity fixtures rather than treating normalization as formatting-only
 - make unsupported/partial parses return structured warnings, not silent skips
 
 ## General Extraction
@@ -882,6 +956,7 @@ Weaknesses:
 - L1 ranking is simplistic
 - no stable scoring model
 - retrieval formatting logic is mixed with data access
+- `layers.py` is not just formatting; it also performs direct vector lookups for later layers
 
 ### Rust Recommendation
 
@@ -921,6 +996,7 @@ Recommendation:
 
 - preserve current output shape first
 - improve ranking once regression tests exist
+- keep exact snapshot parity for formatting and filter semantics, but use tolerant benchmark and overlap gates for ranking quality because Rust embeddings will not be float-identical to Chroma defaults
 
 ## MCP Server
 
@@ -934,6 +1010,7 @@ Recommendation:
 - add/delete drawer tools
 - graph tools
 - knowledge graph tools
+- diary tools
 - embedded AAAK protocol text
 
 Strengths:
@@ -959,6 +1036,7 @@ Suggested service split:
 - `graph_service`
 - `kg_service`
 - `wake_service`
+- `diary_service`
 
 The MCP layer should do only:
 
@@ -981,6 +1059,7 @@ Recommendation:
 - implement the Rust MCP server after core storage and retrieval are stable
 - do not port the current single-file design directly
 - evaluate `rmcp` early, and if it proves unstable or under-maintained, fall back to whichever Rust MCP implementation best supports stdio transport, typed tool schemas, and robust integration testing
+- inventory all current tool families up front: status/taxonomy, search, duplicate checking, graph traversal, knowledge graph mutation/query, drawer write/delete, diary write/read, and AAAK-spec exposure
 
 ## Knowledge Graph
 
@@ -1015,11 +1094,12 @@ Keep this in SQLite.
 Use:
 
 - `sqlx` if you want async and compile-time query checking
-- `rusqlite` if you want a smaller dependency footprint and simpler embedding in a local CLI app
+- `tokio-rusqlite` if you want a `rusqlite`-style API without blocking the async runtime
 
 My recommendation here:
 
-- `rusqlite` is enough unless you expect heavy async server concurrency
+- prefer `sqlx` or `tokio-rusqlite` by default because `LanceDB` already pulls the rewrite toward Tokio
+- use plain `rusqlite` only for deliberately synchronous tooling paths
 
 Enhancements for Rust:
 
@@ -1094,7 +1174,7 @@ What you lose:
 - regex/entity heuristics
 - onboarding-seeded registry
 - learned knowledge
-- optional Wikipedia lookup for unknown terms
+- optional Wikipedia lookup for unknown terms, initiated from the registry side
 
 Strengths:
 
@@ -1105,7 +1185,7 @@ Weaknesses:
 
 - some logic is broad and heuristic-heavy
 - registry schema is JSON-file centric
-- Wikipedia lookup violates the repo's strongest "local only" messaging
+- optional Wikipedia enrichment is a deliberate networked feature path, so the Rust rewrite should present it as opt-in behavior rather than an accidental leak
 
 ### Rust Recommendation
 
@@ -1147,6 +1227,7 @@ On storage choice:
 - people
 - projects
 - wings
+- people-map aliases and name normalization inputs
 - AAAK bootstrap files
 - entity registry
 

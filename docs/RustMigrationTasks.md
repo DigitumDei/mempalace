@@ -67,7 +67,7 @@ Coverage:
 - wake-up payload structure
 - AAAK output rendering
 - knowledge graph edge creation on known fixture inputs
-- MCP tool request/response shapes
+- MCP tool request/response shapes across status/taxonomy, search, graph, knowledge graph, write/delete, diary, and AAAK-spec tools
 
 Implementation approach:
 
@@ -113,6 +113,7 @@ Coverage:
 - migration application and rollback safety
 - compressed drawer storage if retained
 - concurrent reads during ingest
+- crash-recovery reconciliation between `LanceDB` and `SQLite`
 
 ### 4. Ingest Pipeline Integration Tests
 
@@ -149,9 +150,16 @@ Coverage:
 
 These should include:
 
-- golden result tests
+- exact golden result tests for formatting and filter semantics
+- tolerant retrieval checks for ranking quality
 - recall-oriented benchmark fixtures
 - threshold tests for low-CPU profile vs balanced profile
+
+Ranking parity policy:
+
+- exact snapshot parity is required for CLI formatting, wake-up structure, filter semantics, and deterministic tie-breaking
+- retrieval quality parity is measured by overlap and benchmark thresholds, not bit-identical ranking
+- the initial balanced-profile gate should require `>= 0.90` top-5 set overlap with the pinned Python reference on labeled fixtures and `>= 95%` of the Python Recall@5 score on the benchmark fixture
 
 ### 6. MCP Protocol Tests
 
@@ -166,6 +174,8 @@ Coverage:
 - response encoding
 - error propagation
 - search tool behavior
+- graph and knowledge-graph tool behavior
+- diary tool behavior
 - write and delete tool behavior if retained
 - startup/shutdown behavior
 - invalid input handling
@@ -211,6 +221,10 @@ Coverage:
 
 - inspect existing palace state
 - read legacy Chroma records
+- inspect legacy `config.json`, `people_map.json`, and project `mempalace.yaml`
+- inspect legacy `entity_registry.json`
+- inspect onboarding bootstrap artifacts
+- inspect legacy `knowledge_graph.sqlite3`
 - preserve metadata fields
 - rebuild embeddings where necessary
 - detect incompatible legacy state
@@ -244,6 +258,7 @@ Coverage:
 - corrupted SQLite file
 - corrupted LanceDB state
 - partial write interruption
+- interrupted model download or partial cache state
 - malformed JSON/YAML/config files
 - malformed chat exports
 - huge documents
@@ -284,8 +299,15 @@ Before product implementation, build the harness:
    - `chromadb` version
    - model identifier and asset checksum
    - offline regeneration procedure after initial asset acquisition
-7. Benchmark harness for retrieval and low-CPU scenarios.
-8. CI matrix for normal and constrained profiles.
+   - a zero-network assertion for regeneration after cache warm-up
+7. Commit a machine-readable fixture lock manifest:
+   - lockfile path
+   - dependency versions
+   - model checksum
+   - fixture corpus version
+8. Add a fixture-drift job that fails if regenerated Python outputs differ without an intentional baseline update.
+9. Benchmark harness for retrieval and low-CPU scenarios.
+10. CI matrix for normal and constrained profiles.
 
 Without this harness, the rewrite will drift.
 
@@ -343,20 +365,27 @@ Tasks:
    - embedding model identifier
    - model asset checksum or cached artifact source
    - offline warm-cache regeneration procedure
-7. Write acceptance criteria for each subsystem.
+   - explicit zero-network assertion during regeneration
+7. Commit fixture lock and drift policy:
+   - fixture lock manifest checked into the repo
+   - regeneration allowed only through the pinned environment
+   - drift requires explicit review and baseline update
+8. Write acceptance criteria for each subsystem.
 
 Tests to write first:
 
 - contract tests for CLI output
 - contract tests for search result shape
+- contract tests for MCP tool registration surface
 - fixture loading helpers
 
 Exit criteria:
 
 - fixtures committed
 - fixture-generation environment lock committed
+- fixture-drift check committed
 - MCP crate choice or fallback criteria committed
-- acceptance criteria written
+- acceptance criteria written with measurable gates
 - parity vs divergence list approved
 
 ## Phase 1: Workspace and Core Foundations
@@ -424,10 +453,12 @@ Tasks:
 Tests first:
 
 - migration application tests
+- migration rollback tests
 - drawer insert/get/delete integration tests
 - duplicate insert tests
 - metadata filter tests
 - concurrent read tests
+- dual-write crash recovery tests
 
 Pros vs Python:
 
@@ -439,6 +470,8 @@ Pros vs Python:
 Exit criteria:
 
 - storage integration suite passes on real local DBs
+- orphaned `LanceDB` rows are pruned after simulated crashes
+- incomplete SQLite ingest runs are marked failed and retryable
 
 ## Phase 3: Embeddings Subsystem
 
@@ -464,12 +497,15 @@ Tests first:
 - dimension mismatch tests
 - offline startup tests with warm cache
 - expected failure tests when model assets are missing
+- partial-download and corrupted-cache tests
 
 Performance gates:
 
-- query embedding latency threshold
-- ingest embedding throughput threshold
-- memory ceiling threshold for low-CPU profile
+- `balanced` warm query embedding p95: `<= 750 ms` on the reference fixture host
+- `low_cpu` warm query embedding p95: `<= 1500 ms`
+- `low_cpu` end-to-end search p95 on the small-VM fixture: `<= 2500 ms`
+- `low_cpu` resident memory while idle and warm: `<= 450 MB`
+- `low_cpu` resident memory during single-worker ingest: `<= 850 MB`
 
 Pros vs Python:
 
@@ -505,6 +541,7 @@ Tests first:
 - reindex idempotency tests
 - malformed export tests
 - normalization golden tests
+- spellcheck-mutation normalization tests
 - extraction golden tests
 
 Pros vs Python:
@@ -571,6 +608,7 @@ Tests first:
 - entity detection fixtures
 - registry persistence tests
 - graph edge creation tests
+- palace graph tunnel-derivation parity tests
 - duplicate relation tests
 - traversal query tests
 
@@ -623,17 +661,21 @@ Goal:
 Tasks:
 
 1. Implement tool registration.
-2. Port search tools.
-3. Port wake-up and layer tools.
-4. Port write/delete tools if still in scope.
-5. Implement structured error mapping.
-6. Test stdio lifecycle behavior.
+2. Port status and taxonomy tools.
+3. Port search, wake-up, and layer tools.
+4. Port graph and knowledge-graph tools.
+5. Port diary tools.
+6. Port write/delete tools if still in scope.
+7. Implement structured error mapping.
+8. Test stdio lifecycle behavior.
 
 Tests first:
 
 - MCP contract tests
 - invalid input tests
 - tool output shape tests
+- tool-surface completeness tests
+- concurrent MCP write-vs-ingest tests
 - startup/shutdown tests
 
 Pros vs Python:
@@ -660,12 +702,15 @@ Tasks:
 4. Port search output formatting.
 5. Port wake-up command.
 6. Port `split` or explicitly mark it deferred.
+7. Port `compress` or explicitly mark it deferred.
 
 Tests first:
 
 - CLI snapshot tests
 - exit code tests
 - help text tests
+- `split` contract tests if retained
+- `compress` contract tests if retained
 - end-to-end command tests
 
 Pros vs Python:
@@ -695,6 +740,7 @@ Tasks:
    - `entity_registry.json`
    - onboarding-generated markdown artifacts
    - `knowledge_graph.sqlite3`
+   - project-local `mempalace.yaml`
 5. Preserve or remap metadata fields explicitly.
 6. Implement resumable import runs.
 7. Implement post-import verification report.
@@ -706,11 +752,14 @@ Tests first:
 - data-count parity tests
 - metadata parity tests
 - fixture coverage for non-Chroma persisted state
+- project-local config import or inspection tests
+- compressed-drawer interop tests if compressed storage is shipped
 
 Pros vs Python:
 
 - gain optional interoperability without coupling the Rust release to Python internals forever
 - lose some simplicity if you choose to support broad import coverage
+- lose ongoing maintenance time for the pinned Python reference environment if interop and parity fixtures are retained
 
 Exit criteria:
 
@@ -756,7 +805,10 @@ What we lose:
 Exit criteria:
 
 - low-CPU suite passes
-- documented budgets are met
+- documented budgets are met:
+  - warm query p95 `<= 2500 ms`
+  - idle warm RSS `<= 450 MB`
+  - single-worker ingest RSS `<= 850 MB`
 
 ## Phase 12: Release Readiness
 
@@ -784,23 +836,32 @@ Required gates:
 
 These criteria apply across all phases.
 
+Budget policy:
+
+- the numeric latency and memory gates in this document are the initial definition-of-done
+- they may be revised only by an explicit doc update after benchmark review, not ad hoc during implementation
+
 ### Functional
 
 - Rust CLI can initialize, mine, search, wake up, and serve MCP locally.
 - Search results preserve meaningful parity with Python for representative fixtures.
 - Python-state import is optional and, if omitted, explicitly documented as out of scope for the first Rust release.
+- if import is shipped, it covers every declared Python-era state artifact or the missing artifacts are explicitly removed from scope before release
 
 ### Operational
 
 - default deployment is fully local after model acquisition
 - low-CPU profile is explicitly supported
 - startup and query behavior are deterministic
+- Python fixture regeneration is reproducible from a pinned environment and fails if it requires network after cache warm-up
+- cross-store recovery after interrupted ingest is deterministic and covered by integration tests
 
 ### Quality
 
 - schema versions are explicit
 - failures are actionable, not silent
 - no critical path depends on unchecked dynamic metadata blobs
+- retrieval ranking parity uses tolerant quality metrics; formatting and filter semantics use exact snapshots
 
 ## Suggested Task Ordering Inside Each Phase
 
@@ -847,5 +908,6 @@ The safest path is:
 3. implement storage and embeddings before ingest
 4. make low-CPU constraints part of the plan from day one
 5. treat fixture reproducibility and benchmarks as core work, not cleanup work
+6. budget explicitly for maintaining the pinned Python reference environment as long as parity fixtures remain part of the workflow
 
 If this discipline is followed, the Rust rewrite becomes a controlled reimplementation instead of a speculative rewrite.
