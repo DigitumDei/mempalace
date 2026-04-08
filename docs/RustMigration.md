@@ -25,7 +25,8 @@ Recommended Rust stack:
 - `serde`, `serde_json`, `serde_yaml` for config and export parsing
 - `tokio` for async runtime
 - `walkdir` and `ignore` for filesystem traversal
-- `sqlx` or `rusqlite` for SQLite-backed metadata and knowledge graph
+- `sqlx` or `tokio-rusqlite` for SQLite-backed metadata and knowledge graph
+- `time` or `chrono` for date and timestamp handling
 - `lancedb` for vector-backed drawer storage
 - `fastembed`, `ort`, or `candle` for explicit local embeddings
 - `rmcp` or another Rust MCP implementation for the MCP server
