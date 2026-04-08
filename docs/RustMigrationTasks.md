@@ -4,6 +4,8 @@
 
 This document turns the Rust rewrite in `docs/RustMigration.md` into an execution plan.
 
+Detailed implementation checklists for each phase live in `docs/RustImplementationPhasePlans.md` and `docs/rust-phase-plans/`.
+
 The emphasis here is:
 
 - break the rewrite into concrete tasks

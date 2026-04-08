@@ -61,7 +61,7 @@ Three mining modes: **projects** (code and docs), **convos** (conversation expor
 
 ## Rust Migration
 
-The Rust migration is active and documented in [docs/RustMigration.md](docs/RustMigration.md) and [docs/RustMigrationTasks.md](docs/RustMigrationTasks.md). The current plan treats Python as the reference implementation while Rust becomes a sibling implementation focused on the same product shape: local-first storage, verbatim drawers, semantic retrieval with metadata filters, wake-up layers, CLI and MCP support, and AAAK-compatible workflows.
+The Rust migration is active and documented in [docs/RustMigration.md](docs/RustMigration.md), [docs/RustMigrationTasks.md](docs/RustMigrationTasks.md), and the per-phase implementation checklist in [docs/RustImplementationPhasePlans.md](docs/RustImplementationPhasePlans.md). The current plan treats Python as the reference implementation while Rust becomes a sibling implementation focused on the same product shape: local-first storage, verbatim drawers, semantic retrieval with metadata filters, wake-up layers, CLI and MCP support, and AAAK-compatible workflows.
 
 The target Rust architecture splits storage between `LanceDB` for vector-backed drawer content and `SQLite` for config, graph state, manifests, and migrations. The implementation plan is modular, with explicit embedding control, deterministic schemas, and a TDD-first delivery plan that defines contract, integration, performance, and reliability gates up front.
 
