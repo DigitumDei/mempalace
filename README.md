@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/mempalace_logo.png" alt="MemPalace" width="280">
+<img src="assets/file_00000000973071fdaaa15eae21e2a077.png" alt="MemPalace" width="280">
 
 # MemPalace
 
