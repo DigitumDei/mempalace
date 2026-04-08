@@ -23,7 +23,7 @@ The Rust version should preserve the product shape of the current Python app:
 - semantic retrieval with metadata filters
 - wake-up and layered memory loading
 - MCP server support
-- knowledge graph and entity workflows
+- knowledge graph and local/manual entity workflows
 - AAAK compression and rendering
 
 It should also improve on the current Python version by making these explicit:
@@ -195,6 +195,7 @@ Coverage:
 - duplicate edge handling
 - graph traversal queries
 - onboarding-derived entities
+- explicit absence of automatic Wikipedia or other networked entity enrichment in Rust
 
 ### 8. AAAK Tests
 
@@ -602,6 +603,7 @@ Tasks:
 3. Port hall, room, and tunnel derivation.
 4. Port graph traversal APIs.
 5. Port onboarding-derived setup behavior if retained.
+6. Document and test that Wikipedia research/enrichment from the Python registry layer is intentionally not implemented in Rust.
 
 Tests first:
 
@@ -611,6 +613,7 @@ Tests first:
 - palace graph tunnel-derivation parity tests
 - duplicate relation tests
 - traversal query tests
+- negative tests proving entity workflows do not perform network lookups or depend on Wikipedia-derived cache state
 
 Pros vs Python:
 

@@ -1176,7 +1176,7 @@ What you lose:
 - regex/entity heuristics
 - onboarding-seeded registry
 - learned knowledge
-- optional Wikipedia lookup for unknown terms, initiated from the registry side
+- an optional Python-only Wikipedia lookup path for unknown terms, initiated from the registry side
 
 Strengths:
 
@@ -1187,7 +1187,7 @@ Weaknesses:
 
 - some logic is broad and heuristic-heavy
 - registry schema is JSON-file centric
-- optional Wikipedia enrichment is a deliberate networked feature path, so the Rust rewrite should present it as opt-in behavior rather than an accidental leak
+- the Wikipedia research path is networked, heuristic, untested in normal app flow, and not core to the local-first product shape
 
 ### Rust Recommendation
 
@@ -1197,13 +1197,13 @@ Split the problem:
    - SQLite-backed or JSON-backed, but with a typed schema
 2. `entity_detector`
    - regex/rule engine
-3. `entity_enrichment`
-   - optional external lookups behind an explicit feature flag
 
 Recommendation:
 
 - default to local-only behavior in Rust
-- make Wikipedia enrichment opt-in and disabled by default
+- do not implement Wikipedia enrichment or any automatic external entity lookup in the Rust release
+- keep entity handling limited to local heuristics, onboarding data, and explicit user-managed registry state
+- treat external enrichment as out of scope unless there is a later product decision to add a separately reviewed feature
 
 What you gain:
 
@@ -1213,7 +1213,7 @@ What you gain:
 
 What you lose:
 
-- slightly less "magic" for unknown names unless the user opts in
+- less "magic" for unknown names, but no current product dependency on that behavior
 
 On storage choice:
 
@@ -1395,7 +1395,7 @@ Examples of good divergence:
 - explicit embedding subsystem
 - SQLite ingest manifests
 - stronger schema validation
-- opt-in external enrichment
+- explicitly local-only entity handling with no networked enrichment
 
 ## Security and Privacy Impact of the Rust Port
 
@@ -1556,7 +1556,6 @@ It should defer:
 - AAAK compression parity
 - full MCP parity
 - graph traversal bells and whistles
-- optional external enrichment
 
 That gives you a credible Rust core without prematurely rebuilding every edge feature.
 
