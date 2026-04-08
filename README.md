@@ -4,19 +4,19 @@
 
 # MemPalace
 
-### The highest-scoring AI memory system ever benchmarked. And it's free.
+### Local-first AI memory for conversations, projects, and agent workflows.
 
 <br>
 
-Every conversation you have with an AI — every decision, every debugging session, every architecture debate — disappears when the session ends. Six months of work, gone. You start over every time.
+MemPalace stores conversation and project context locally so your AI can search decisions, debugging history, and project knowledge instead of starting from zero each session.
 
-Other memory systems try to fix this by letting AI decide what's worth remembering. It extracts "user prefers Postgres" and throws away the conversation where you explained *why*. MemPalace takes a different approach: **store everything, then make it findable.**
+Instead of reducing everything to thin summaries, MemPalace keeps the original material and organizes it into wings, halls, rooms, closets, and drawers so retrieval stays grounded in the underlying source.
 
-**The Palace** — Ancient Greek orators memorized entire speeches by placing ideas in rooms of an imaginary building. Walk through the building, find the idea. MemPalace applies the same principle to AI memory: your conversations are organized into wings (people and projects), halls (types of memory), and rooms (specific ideas). No AI decides what matters — you keep every word, and the structure makes it searchable. That structure alone improves retrieval by 34%.
+**The Palace** — Ancient Greek orators memorized speeches by placing ideas in rooms of an imaginary building. MemPalace applies that idea to AI memory: your conversations are organized into wings (people and projects), halls (types of memory), and rooms (specific ideas). No AI decides what matters for you. You keep the source material, and the structure makes it searchable.
 
-**AAAK** — A lossless shorthand dialect designed for AI agents. Not meant to be read by humans — meant to be read by your AI, fast. 30x compression, zero information loss. Your AI loads months of context in ~120 tokens. And because AAAK is just structured text with a universal grammar, it works with **any model that reads text** — Claude, GPT, Gemini, Llama, Mistral. No decoder, no fine-tuning, no cloud API required. Run it against a local model and your entire memory stack stays offline. Nothing else like it exists.
+**AAAK** — A shorthand dialect designed for AI agents so they can load compact context quickly. Because it is structured text rather than a model-specific binary format, it works across hosted and local text models.
 
-**Local, open, adaptable** — MemPalace runs entirely on your machine, on any data you have locally, without using any external API or services. It has been tested on conversations — but it can be adapted for different types of datastores. This is why we're open-sourcing it.
+**Local, open, adaptable** — MemPalace runs on your machine against local data, with CLI and MCP workflows, and can be adapted to different data sources.
 
 <br>
 
@@ -27,22 +27,9 @@ Other memory systems try to fix this by letting AI decide what's worth rememberi
 
 <br>
 
-[Quick Start](#quick-start) · [The Palace](#the-palace) · [AAAK Dialect](#aaak-compression) · [Benchmarks](#benchmarks) · [MCP Tools](#mcp-server)
+[Quick Start](#quick-start) · [Rust Migration](#rust-migration) · [Legacy README](#legacy-readme) · [MCP Tools](#mcp-server)
 
 <br>
-
-### Highest LongMemEval score ever published — free or paid.
-
-<table>
-<tr>
-<td align="center"><strong>96.6%</strong><br><sub>LongMemEval R@5<br>Zero API calls</sub></td>
-<td align="center"><strong>100%</strong><br><sub>LongMemEval R@5<br>with Haiku rerank</sub></td>
-<td align="center"><strong>+34%</strong><br><sub>Retrieval boost<br>from palace structure</sub></td>
-<td align="center"><strong>$0</strong><br><sub>No subscription<br>No cloud. Local only.</sub></td>
-</tr>
-</table>
-
-<sub>Reproducible — runners in <a href="benchmarks/">benchmarks/</a>. <a href="benchmarks/BENCHMARKS.md">Full results</a>.</sub>
 
 </div>
 
@@ -69,6 +56,20 @@ mempalace status
 ```
 
 Three mining modes: **projects** (code and docs), **convos** (conversation exports), and **general** (auto-classifies into decisions, preferences, milestones, problems, and emotional context). Everything stays on your machine.
+
+---
+
+## Rust Migration
+
+The Rust migration is active and documented in [docs/RustMigration.md](docs/RustMigration.md) and [docs/RustMigrationTasks.md](docs/RustMigrationTasks.md). The current plan treats Python as the reference implementation while Rust becomes a sibling implementation focused on the same product shape: local-first storage, verbatim drawers, semantic retrieval with metadata filters, wake-up layers, CLI and MCP support, and AAAK-compatible workflows.
+
+The target Rust architecture splits storage between `LanceDB` for vector-backed drawer content and `SQLite` for config, graph state, manifests, and migrations. The implementation plan is modular, with explicit embedding control, deterministic schemas, and a TDD-first delivery plan that defines contract, integration, performance, and reliability gates up front.
+
+---
+
+## Legacy README
+
+The sections below describe the current Python implementation and original product framing. They are kept for reference while the Rust migration is in progress.
 
 ---
 
@@ -150,7 +151,7 @@ Each wing has **rooms** connected to it, where information is divided into subje
 
 Every room has a **closet** connected to it, and here's where things get interesting. We've developed an AI language called **AAAK**. Don't ask — it's a whole story of its own. Your agent learns the AAAK shorthand every time it wakes up. Because AAAK is essentially English, but a very truncated version, your agent understands how to use it in seconds. It comes as part of the install, built into the MemPalace code. In our next update, we'll add AAAK directly to the closets, which will be a real game changer — the amount of info in the closets will be much bigger, but it will take up far less space and far less reading time for your agent.
 
-Inside those closets are **drawers**, and those drawers are where your original files live. In this first version, we haven't used AAAK as a closet tool, but even so, the summaries have shown **96.6% recall** in all the benchmarks we've done across multiple benchmarking platforms. Once the closets use AAAK, searches will be even faster while keeping every word exact. But even now, the closet approach has been a huge boon to how much info is stored in a small space — it's used to easily point your AI agent to the drawer where your original file lives. You never lose anything, and all this happens in seconds.
+Inside those closets are **drawers**, and those drawers are where your original files live. In this first version, we haven't used AAAK as a closet tool yet. Once the closets use AAAK directly, searches should become more compact while keeping every word exact. Even now, the closet approach is what points your AI agent back to the drawer where the original file lives. You never lose anything, and all this happens in seconds.
 
 There are also **halls**, which connect rooms within a wing, and **tunnels**, which connect rooms from different wings to one another. So finding things becomes truly effortless — we've given the AI a clean and organized way to know where to start searching, without having to look through every keyword in huge folders.
 
@@ -212,16 +213,7 @@ Same room. Three wings. The tunnel connects them.
 
 ### Why Structure Matters
 
-Tested on 22,000+ real conversation memories:
-
-```
-Search all closets:          60.9%  R@10
-Search within wing:          73.1%  (+12%)
-Search wing + hall:          84.8%  (+24%)
-Search wing + room:          94.8%  (+34%)
-```
-
-Wings and rooms aren't cosmetic. They're a **34% retrieval improvement**. The palace structure is the product.
+Wings and rooms aren't cosmetic. They give the system a concrete way to narrow search scope before retrieval, which is why the palace structure is part of the product rather than just branding.
 
 ### The Memory Stack
 
@@ -480,33 +472,6 @@ Two hooks for Claude Code that automatically save memories during work:
 
 ---
 
-## Benchmarks
-
-Tested on standard academic benchmarks — reproducible, published datasets.
-
-| Benchmark | Mode | Score | API Calls |
-|-----------|------|-------|-----------|
-| **LongMemEval R@5** | Raw (ChromaDB only) | **96.6%** | Zero |
-| **LongMemEval R@5** | Hybrid + Haiku rerank | **100%** (500/500) | ~500 |
-| **LoCoMo R@10** | Raw, session level | **60.3%** | Zero |
-| **Personal palace R@10** | Heuristic bench | **85%** | Zero |
-| **Palace structure impact** | Wing+room filtering | **+34%** R@10 | Zero |
-
-The 96.6% raw score is the highest published LongMemEval result requiring no API key, no cloud, and no LLM at any stage.
-
-### vs Published Systems
-
-| System | LongMemEval R@5 | API Required | Cost |
-|--------|----------------|--------------|------|
-| **MemPalace (hybrid)** | **100%** | Optional | Free |
-| Supermemory ASMR | ~99% | Yes | — |
-| **MemPalace (raw)** | **96.6%** | **None** | **Free** |
-| Mastra | 94.87% | Yes (GPT) | API costs |
-| Mem0 | ~85% | Yes | $19–249/mo |
-| Zep | ~85% | Yes | $25/mo+ |
-
----
-
 ## All Commands
 
 ```bash
@@ -614,12 +579,6 @@ mempalace/
 │   ├── searcher.py            ← semantic search
 │   ├── onboarding.py          ← guided setup
 │   └── ...                    ← see mempalace/README.md
-├── benchmarks/                ← reproducible benchmark runners
-│   ├── README.md              ← reproduction guide
-│   ├── BENCHMARKS.md          ← full results + methodology
-│   ├── longmemeval_bench.py   ← LongMemEval runner
-│   ├── locomo_bench.py        ← LoCoMo runner
-│   └── membench_bench.py      ← MemBench runner
 ├── hooks/                     ← Claude Code auto-save hooks
 │   ├── README.md              ← hook setup guide
 │   ├── mempal_save_hook.sh    ← save every N messages
