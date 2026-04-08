@@ -294,10 +294,11 @@ Recommended interface:
 
 ```rust
 trait EmbeddingProvider {
+    type Error: std::error::Error + Send + Sync + 'static;
     fn model_id(&self) -> &'static str;
     fn dimension(&self) -> usize;
-    fn embed_documents(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>>;
-    fn embed_query(&self, text: &str) -> anyhow::Result<Vec<f32>>;
+    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, Self::Error>;
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>, Self::Error>;
 }
 ```
 
