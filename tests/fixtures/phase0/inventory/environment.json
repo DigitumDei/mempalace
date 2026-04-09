@@ -1,0 +1,8 @@
+{
+  "packages": {
+    "PyYAML": "6.0.3",
+    "chromadb": "1.5.7",
+    "pytest": "9.0.3"
+  },
+  "python_version": "3.11.2 (main, Apr 28 2025, 14:11:48) [GCC 12.2.0]"
+}

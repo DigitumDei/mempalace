@@ -1,0 +1,29 @@
+{
+  "generated_by": "scripts/phase0_capture.py",
+  "generated_hashes": {
+    "goldens/aaak.json": "ab6ec8fa8705cd067518395ed5e3e4b39e63efd640b4ddbd86d697fb8d8f0e5b",
+    "goldens/knowledge-graph.json": "be66f3f05b92384a066258acc95d91c7db9de47f27e30ae7970533e37c1500e9",
+    "goldens/mcp-contract.json": "6080d7ab26ca67ae908be60fe48bdb6f85a9a7fd692219168da05171dfb8518b",
+    "goldens/palace-graph.json": "3e424b816276313ce30fddb0785844f9c694aa791065a33041bd9b95e20192b2",
+    "goldens/search-cli.txt": "6822777ffc1e41946865fd309ddfed6f7ad64d734b0392c3a644e3570eb53812",
+    "goldens/search-programmatic.json": "84ed72f68f0d87373fa421e2ee5ee17a1a3b90fb136d1f81db99bfd45616f9b4",
+    "goldens/wake-up-wing-code.txt": "c62d8aa4ce12a14e8263111767264430d71b6ebda8106e97040fe4967fa4ee4e",
+    "goldens/wake-up.txt": "1376185f317c546a70cc7726955a0c35689f189f69f14d70ac3517bb9add4ddf",
+    "inputs/convos/product_strategy.txt": "0153de51c16a1c6e6407b9548325a75d78364fb71d6762b4d4638a533ec98658",
+    "inputs/project_alpha/backend/auth.py": "b9ba831346216b5c9a9f7391f70455ca62cdcc19208ff7a1a99b2385c49c9266",
+    "inputs/project_alpha/docs/plan.md": "a4540dce586d67050511d576682ad0ce8c8fcbb6254f1c302056fc538bdeffe5",
+    "inputs/project_alpha/mempalace.yaml": "6fb9b86c165722382d670661a4dab6d7e0aa2f8859b62e427e359e00a1458e03",
+    "inventory/cli-help.json": "2592f920cd18bc6df625474721d4564120d8b537a3f2de3bfe57c5db74129579",
+    "inventory/environment.json": "3fe0886cbe5ef1561b73ad877d0f0585e4d96e3597882071473b1c0c38067a7f",
+    "inventory/mcp-tools.json": "ce906cdbac2128ca75fae4261acfcbb335958e7d1446bd6a6182d601990ae930"
+  },
+  "input_hashes": {
+    "inputs/convos/product_strategy.txt": "0153de51c16a1c6e6407b9548325a75d78364fb71d6762b4d4638a533ec98658",
+    "inputs/project_alpha/backend/auth.py": "b9ba831346216b5c9a9f7391f70455ca62cdcc19208ff7a1a99b2385c49c9266",
+    "inputs/project_alpha/docs/plan.md": "a4540dce586d67050511d576682ad0ce8c8fcbb6254f1c302056fc538bdeffe5",
+    "inputs/project_alpha/mempalace.yaml": "6fb9b86c165722382d670661a4dab6d7e0aa2f8859b62e427e359e00a1458e03"
+  },
+  "phase": "0",
+  "python": "3.11.2",
+  "version": 1
+}

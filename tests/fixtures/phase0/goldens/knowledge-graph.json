@@ -1,0 +1,54 @@
+{
+  "query": [
+    {
+      "confidence": 1.0,
+      "current": true,
+      "direction": "outgoing",
+      "object": "CLI Parity",
+      "predicate": "preserves",
+      "source_closet": null,
+      "subject": "Rust Rewrite",
+      "valid_from": "2026-04-02",
+      "valid_to": null
+    },
+    {
+      "confidence": 1.0,
+      "current": true,
+      "direction": "outgoing",
+      "object": "MCP Tool Names",
+      "predicate": "preserves",
+      "source_closet": null,
+      "subject": "Rust Rewrite",
+      "valid_from": "2026-04-02",
+      "valid_to": null
+    }
+  ],
+  "stats": {
+    "current_facts": 3,
+    "entities": 5,
+    "expired_facts": 0,
+    "relationship_types": [
+      "depends_on",
+      "preserves"
+    ],
+    "triples": 3
+  },
+  "timeline": [
+    {
+      "current": true,
+      "object": "CLI Parity",
+      "predicate": "preserves",
+      "subject": "Rust Rewrite",
+      "valid_from": "2026-04-02",
+      "valid_to": null
+    },
+    {
+      "current": true,
+      "object": "MCP Tool Names",
+      "predicate": "preserves",
+      "subject": "Rust Rewrite",
+      "valid_from": "2026-04-02",
+      "valid_to": null
+    }
+  ]
+}
