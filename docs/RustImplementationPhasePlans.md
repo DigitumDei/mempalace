@@ -36,4 +36,4 @@ Recommended usage:
 1. Keep [RustMigration.md](RustMigration.md) as the architecture source.
 2. Keep [RustMigrationTasks.md](RustMigrationTasks.md) as the top-level execution map and test policy.
 3. Use the per-phase documents as the delivery checklist while work is active.
-4. Update phase documents when scope, gates, or parity decisions change so the detailed plans do not drift from the master task plan.
+4. Update phase documents when scope, gates, or parity decisions change so the detailed plans do not drift from the master task plan in [RustMigrationTasks.md](RustMigrationTasks.md).
