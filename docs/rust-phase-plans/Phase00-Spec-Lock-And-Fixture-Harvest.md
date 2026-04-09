@@ -98,7 +98,7 @@ Freeze the Python reference behavior, define where Rust must match it exactly, a
 - Reference environment is pinned and reproducible.
 - Drift policy is enforceable in automation.
 - Parity and divergence decisions are explicit.
-- No later phase depends on undefined behavior.
+- Subsystem acceptance criteria are written, linked, and mapped to the later phases that consume them.
 
 ## Risks To Watch
 

@@ -1466,76 +1466,11 @@ Loss:
 
 - more up-front design work
 
-## Suggested Rewrite Phases
+## Execution Planning Note
 
-### Phase 1: Storage and Search Parity
+The old five-phase rewrite sketch that previously lived here is superseded by the maintained execution plan in [RustMigrationTasks.md](RustMigrationTasks.md) and [RustImplementationPhasePlans.md](RustImplementationPhasePlans.md).
 
-Build:
-
-- config loader
-- drawer schema
-- LanceDB adapter
-- embedding provider trait
-- `search`
-- `status`
-- `list_wings`
-- `list_rooms`
-
-Goal:
-
-- replace the main Chroma dependency first
-
-### Phase 2: Ingestion Parity
-
-Build:
-
-- project miner
-- conversation normalizers
-- conversation miner
-- general extractor
-- ingest manifest tables
-
-Goal:
-
-- same corpus in, same retrieval utility out
-
-### Phase 3: Layered Memory and AAAK
-
-Build:
-
-- wake-up generation
-- Layer 1/2/3 formatting
-- compression storage
-- AAAK tooling
-
-Goal:
-
-- restore the distinctive MemPalace UX
-
-### Phase 4: Graph and MCP
-
-Build:
-
-- knowledge graph
-- palace graph
-- MCP server tools
-
-Goal:
-
-- full tool-driven assistant integration
-
-### Phase 5: Compatibility and Import Tooling
-
-Build:
-
-- Python-state inspection helpers
-- optional Chroma export/import bridge
-- optional config conversion helpers
-- regression benchmark harness
-
-Goal:
-
-- preserve useful interoperability without making Python-user migration a release gate
+Use this document for architecture and design rationale. Use the task and phase-plan documents for sequencing, scope gates, and implementation checklists.
 
 ## Recommended First Rust MVP
 

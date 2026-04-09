@@ -36,7 +36,7 @@ Make embeddings an explicit, configurable, offline-capable subsystem with clear 
 ### 5. Performance Budget Enforcement
 
 - Build measurement hooks for latency and memory budgets.
-- Capture warm path benchmarks on the reference environment.
+- Capture warm path benchmarks on the reference environment as the subsystem baseline that Phase 11 later uses for low-CPU hardening gates.
 
 ## Deliverables
 
@@ -77,7 +77,7 @@ Make embeddings an explicit, configurable, offline-capable subsystem with clear 
 
 - Embedding provider tests pass.
 - Startup behavior is deterministic and actionable in offline scenarios.
-- Performance numbers are recorded against the initial budget targets.
+- Baseline performance numbers are recorded and published for later comparison in Phase 11.
 
 ## Risks To Watch
 

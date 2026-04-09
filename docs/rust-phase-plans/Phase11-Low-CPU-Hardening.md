@@ -32,6 +32,7 @@ Make the Rust implementation usable on a very small always-on VM by enforcing bo
 ### 4. Instrumentation and Benchmarks
 
 - Capture latency and RSS under low-CPU conditions.
+- Treat the measurements recorded in Phase 3 as the subsystem baseline, and use this phase to validate the final low-CPU acceptance budgets on end-to-end flows.
 - Validate behavior on a fixture set that resembles personal always-on use.
 
 ## Deliverables

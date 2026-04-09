@@ -4,6 +4,8 @@
 
 Support inspection and optional import of Python-era MemPalace state without making Python-user migration a hidden release requirement.
 
+This is a conditional phase. Execute it only if release scope still includes Python-era state inspection or import after the Phase 10 scope-lock decision.
+
 ## Dependencies
 
 - Phase 2 storage layer is stable.

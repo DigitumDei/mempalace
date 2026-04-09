@@ -20,7 +20,7 @@ Replace Python's Chroma-centric storage with explicit `LanceDB` plus `SQLite`, i
 ### 2. LanceDB Drawer Schema
 
 - Create the drawers table with stable field definitions and embedding dimensions tied to profile configuration.
-- Decide how compressed drawers are represented if retained.
+- Implement the storage representation required by the compressed-drawer scope decision made in Phase 5 if that feature is retained.
 - Define indexing and filtering strategy for wing, room, date, and source metadata.
 
 ### 3. Repository Interfaces
@@ -64,7 +64,7 @@ Replace Python's Chroma-centric storage with explicit `LanceDB` plus `SQLite`, i
 - [ ] Define LanceDB drawer schema from `DrawerRecord`.
 - [ ] Bind embedding dimensions to profile constants.
 - [ ] Create table initialization flow.
-- [ ] Decide compressed drawer storage handling.
+- [ ] Implement compressed drawer storage handling if Phase 5 retains compressed drawers for first release.
 - [ ] Define drawer store trait.
 - [ ] Define ingest manifest store trait.
 - [ ] Define entity registry store trait.
