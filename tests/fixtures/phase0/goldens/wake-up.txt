@@ -12,6 +12,9 @@ Mission: freeze the Python surface before Rust implementation.
 [backend]
   - def issue_session(user_id: str) -> str:     """     We switched from opaque session blobs to signed session tokens because the     old format made auth debugging painful during the Rust migration w...  (auth.py)
 
+[phase0-rollout]
+  - Phase 0 rollout stays on the team wing so graph traversal captures connected_via semantics.  (rollout.txt)
+
 [planning]
   - # Rust migration notes  Phase 0 locks the Python reference behavior before any Rust rewrite starts.  We decided to harvest fixtures first because search formatting, wake-up text, and MCP payload sh...  (plan.md)
 

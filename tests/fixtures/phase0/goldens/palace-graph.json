@@ -4,7 +4,7 @@
       "project_alpha": 2,
       "strategy_convos": 1,
       "wing_code": 1,
-      "wing_team": 1,
+      "wing_team": 2,
       "wing_user": 1
     },
     "top_tunnels": [
@@ -18,7 +18,7 @@
       }
     ],
     "total_edges": 2,
-    "total_rooms": 5,
+    "total_rooms": 6,
     "tunnel_rooms": 1
   },
   "traverse": [
@@ -32,6 +32,20 @@
       "room": "auth-migration",
       "wings": [
         "wing_code",
+        "wing_team"
+      ]
+    },
+    {
+      "connected_via": [
+        "wing_team"
+      ],
+      "count": 1,
+      "halls": [
+        "hall_events"
+      ],
+      "hop": 1,
+      "room": "phase0-rollout",
+      "wings": [
         "wing_team"
       ]
     }

@@ -9,10 +9,12 @@ import importlib.metadata
 import io
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 
@@ -22,6 +24,12 @@ INPUT_ROOT = FIXTURE_ROOT / "inputs"
 GOLDEN_ROOT = FIXTURE_ROOT / "goldens"
 INVENTORY_ROOT = FIXTURE_ROOT / "inventory"
 LOCK_PATH = FIXTURE_ROOT / "fixture-lock.json"
+SANITIZED_HOME = "/tmp/mempalace-phase0-home"
+SANITIZED_PALACE_PATH = f"{SANITIZED_HOME}/.mempalace/palace"
+TOLERANT_OUTPUTS = {
+    "goldens/search-cli.txt",
+    "goldens/search-programmatic.json",
+}
 
 
 def _bootstrap_paths() -> None:
@@ -33,12 +41,12 @@ def _bootstrap_paths() -> None:
 
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 
 
 def _write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def _sha256(path: Path) -> str:
@@ -57,35 +65,113 @@ def _run_help(args: list[str], env: dict[str, str]) -> str:
     return proc.stdout
 
 
+def _sanitize_payload(payload: object, tmp_home: Path, tmp_palace: Path) -> object:
+    if isinstance(payload, dict):
+        return {
+            key: _sanitize_payload(value, tmp_home=tmp_home, tmp_palace=tmp_palace)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [_sanitize_payload(value, tmp_home=tmp_home, tmp_palace=tmp_palace) for value in payload]
+    if isinstance(payload, str):
+        return (
+            payload.replace(str(tmp_palace), SANITIZED_PALACE_PATH).replace(str(tmp_home), SANITIZED_HOME)
+        )
+    return payload
+
+
+def _load_dependency_inputs() -> dict[str, object]:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = pyproject.get("project", {})
+    optional = project.get("optional-dependencies", {})
+
+    requirements = [
+        line.strip()
+        for line in (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+    return {
+        "pyproject": {
+            "requires_python": project.get("requires-python"),
+            "dependencies": project.get("dependencies", []),
+            "optional_dependencies": optional,
+        },
+        "requirements_txt": requirements,
+    }
+
+
+def _normalize_search_results(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    normalized = []
+    for result in results:
+        normalized.append(
+            {
+                "wing": result.get("wing"),
+                "room": result.get("room"),
+                "source_file": result.get("source_file"),
+                "text": result.get("text"),
+            }
+        )
+    return sorted(
+        normalized,
+        key=lambda item: (
+            str(item["wing"]),
+            str(item["room"]),
+            str(item["source_file"]),
+            str(item["text"]),
+        ),
+    )
+
+
+def _normalize_mcp_search_contract(payload: dict[str, object]) -> dict[str, object]:
+    content = payload.get("result", {}).get("content", [])
+    if not content:
+        return payload
+
+    first = content[0]
+    if not isinstance(first, dict) or first.get("type") != "text":
+        return payload
+
+    search_payload = json.loads(first["text"])
+    normalized_search = {
+        "query": search_payload["query"],
+        "filters": search_payload["filters"],
+        "results": _normalize_search_results(search_payload["results"]),
+    }
+    payload["result"]["content"][0]["text"] = json.dumps(normalized_search, indent=2, sort_keys=True)
+    return payload
+
+
 def main() -> int:
     _bootstrap_paths()
 
     tmp_home = Path(tempfile.mkdtemp(prefix="mempalace-phase0-home-"))
     tmp_palace = tmp_home / ".mempalace" / "palace"
     tmp_home_mempal = tmp_home / ".mempalace"
-    tmp_home_mempal.mkdir(parents=True, exist_ok=True)
-    (tmp_home_mempal / "identity.txt").write_text(
-        "## L0 - IDENTITY\nI am the MemPalace phase 0 reference capture.\n"
-        "Traits: deterministic, local-first, test-oriented.\n"
-        "Mission: freeze the Python surface before Rust implementation.\n",
-        encoding="utf-8",
-    )
-
     old_home = os.environ.get("HOME")
-    os.environ["HOME"] = str(tmp_home)
-    os.environ["MEMPALACE_PALACE_PATH"] = str(tmp_palace)
-
-    env = os.environ.copy()
-    extra_pythonpath = []
-    vendor = REPO_ROOT / ".phase0_vendor"
-    if vendor.exists():
-        extra_pythonpath.append(str(vendor))
-    extra_pythonpath.append(str(REPO_ROOT))
-    env["PYTHONPATH"] = os.pathsep.join(extra_pythonpath + [env.get("PYTHONPATH", "")]).strip(
-        os.pathsep
-    )
 
     try:
+        tmp_home_mempal.mkdir(parents=True, exist_ok=True)
+        (tmp_home_mempal / "identity.txt").write_text(
+            "## L0 - IDENTITY\nI am the MemPalace phase 0 reference capture.\n"
+            "Traits: deterministic, local-first, test-oriented.\n"
+            "Mission: freeze the Python surface before Rust implementation.\n",
+            encoding="utf-8",
+        )
+
+        os.environ["HOME"] = str(tmp_home)
+        os.environ["MEMPALACE_PALACE_PATH"] = str(tmp_palace)
+
+        env = os.environ.copy()
+        extra_pythonpath = []
+        vendor = REPO_ROOT / ".phase0_vendor"
+        if vendor.exists():
+            extra_pythonpath.append(str(vendor))
+        extra_pythonpath.append(str(REPO_ROOT))
+        env["PYTHONPATH"] = os.pathsep.join(extra_pythonpath + [env.get("PYTHONPATH", "")]).strip(
+            os.pathsep
+        )
+
         from mempalace.convo_miner import mine_convos
         from mempalace.dialect import Dialect
         from mempalace.layers import MemoryStack
@@ -113,11 +199,13 @@ def main() -> int:
                 "drawer_wing_team_auth_migration_001",
                 "drawer_wing_code_auth_migration_001",
                 "drawer_wing_user_release_readiness_001",
+                "drawer_wing_team_phase0_rollout_001",
             ],
             documents=[
                 "The team decided the auth-migration must preserve CLI and MCP parity.",
                 "Code notes: auth-migration keeps search filter semantics exact while storage changes underneath.",
                 "Release readiness depends on reproducible fixtures and drift checks before Phase 1 starts.",
+                "Phase 0 rollout stays on the team wing so graph traversal captures connected_via semantics.",
             ],
             metadatas=[
                 {
@@ -153,6 +241,17 @@ def main() -> int:
                     "filed_at": "2026-04-03T12:00:00",
                     "importance": 4,
                 },
+                {
+                    "wing": "wing_team",
+                    "room": "phase0-rollout",
+                    "hall": "hall_events",
+                    "date": "2026-04-04",
+                    "source_file": "seed/rollout.txt",
+                    "chunk_index": 0,
+                    "added_by": "phase0",
+                    "filed_at": "2026-04-04T09:00:00",
+                    "importance": 3,
+                },
             ],
         )
 
@@ -170,6 +269,10 @@ def main() -> int:
             valid_from="2026-04-02",
             source_file="phase0",
         )
+        kg.add_triple(
+            "Rust Rewrite", "targets", "Phase 1", valid_from="2026-04-03", source_file="phase0"
+        )
+        kg.invalidate("Rust Rewrite", "targets", "Phase 1", ended="2026-04-04")
 
         cli_inventory = {
             "commands": {
@@ -202,8 +305,10 @@ def main() -> int:
                 continue
 
         env_inventory = {
-            "python_version": sys.version,
-            "packages": packages,
+            "python_version": sys.version.split()[0],
+            "python_implementation": platform.python_implementation(),
+            "dependency_inputs": _load_dependency_inputs(),
+            "resolved_packages": packages,
         }
         _write_json(INVENTORY_ROOT / "environment.json", env_inventory)
 
@@ -214,6 +319,13 @@ def main() -> int:
             ),
             "room_filtered": search_memories(
                 "auth migration parity", str(tmp_palace), room="auth-migration", n_results=3
+            ),
+            "wing_and_room_filtered": search_memories(
+                "auth migration parity",
+                str(tmp_palace),
+                wing="wing_team",
+                room="auth-migration",
+                n_results=3,
             ),
         }
         _write_json(GOLDEN_ROOT / "search-programmatic.json", programmatic_search)
@@ -255,6 +367,13 @@ def main() -> int:
             GOLDEN_ROOT / "knowledge-graph.json",
             {
                 "query": kg.query_entity("Rust Rewrite", direction="both"),
+                "invalidate": {
+                    "subject": "Rust Rewrite",
+                    "predicate": "targets",
+                    "object": "Phase 1",
+                    "ended": "2026-04-04",
+                    "post_query": kg.query_entity("Rust Rewrite", direction="both"),
+                },
                 "timeline": kg.timeline("Rust Rewrite"),
                 "stats": kg.stats(),
             },
@@ -292,7 +411,11 @@ def main() -> int:
             ),
             "status_payload": tool_status(),
         }
-        _write_json(GOLDEN_ROOT / "mcp-contract.json", mcp_contract)
+        mcp_contract["search"] = _normalize_mcp_search_contract(mcp_contract["search"])
+        _write_json(
+            GOLDEN_ROOT / "mcp-contract.json",
+            _sanitize_payload(mcp_contract, tmp_home=tmp_home, tmp_palace=tmp_palace),
+        )
 
         input_hashes = {
             str(path.relative_to(FIXTURE_ROOT)): _sha256(path)
@@ -302,7 +425,9 @@ def main() -> int:
         generated_hashes = {
             str(path.relative_to(FIXTURE_ROOT)): _sha256(path)
             for path in sorted((FIXTURE_ROOT).rglob("*"))
-            if path.is_file() and path != LOCK_PATH
+            if path.is_file()
+            and path != LOCK_PATH
+            and str(path.relative_to(FIXTURE_ROOT)) not in TOLERANT_OUTPUTS
         }
         _write_json(
             LOCK_PATH,
@@ -313,6 +438,7 @@ def main() -> int:
                 "python": sys.version.split()[0],
                 "input_hashes": input_hashes,
                 "generated_hashes": generated_hashes,
+                "tolerant_generated_files": sorted(TOLERANT_OUTPUTS),
             },
         )
     finally:

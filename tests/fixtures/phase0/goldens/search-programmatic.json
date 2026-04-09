@@ -52,6 +52,22 @@
       }
     ]
   },
+  "wing_and_room_filtered": {
+    "filters": {
+      "room": "auth-migration",
+      "wing": "wing_team"
+    },
+    "query": "auth migration parity",
+    "results": [
+      {
+        "room": "auth-migration",
+        "similarity": 0.49,
+        "source_file": "team.txt",
+        "text": "The team decided the auth-migration must preserve CLI and MCP parity.",
+        "wing": "wing_team"
+      }
+    ]
+  },
   "wing_filtered": {
     "filters": {
       "room": null,
@@ -64,6 +80,13 @@
         "similarity": 0.49,
         "source_file": "team.txt",
         "text": "The team decided the auth-migration must preserve CLI and MCP parity.",
+        "wing": "wing_team"
+      },
+      {
+        "room": "phase0-rollout",
+        "similarity": -0.848,
+        "source_file": "rollout.txt",
+        "text": "Phase 0 rollout stays on the team wing so graph traversal captures connected_via semantics.",
         "wing": "wing_team"
       }
     ]

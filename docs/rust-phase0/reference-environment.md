@@ -2,8 +2,9 @@
 
 ## Baseline
 
-- Python executable: `python3`
-- Package metadata source: `pyproject.toml` and `requirements.txt`
+- Python version used for the committed Phase 0 capture: `3.11.2`
+- Python implementation: `CPython`
+- Dependency inputs recorded from: `pyproject.toml` and `requirements.txt`
 - Local dependency bootstrap used for Phase 0 capture in this repo:
   - `pip3 install --target .phase0_vendor chromadb pyyaml pytest build twine`
 
@@ -23,6 +24,7 @@ PYTHONPATH=.phase0_vendor:. python3 scripts/check_phase0_drift.py
 
 - The capture script uses the Python reference implementation directly.
 - Search goldens rely on Chroma's default embedding path and may warm model assets on first run.
+- Drift enforcement is split by contract surface: exact-byte for CLI/MCP/graph/layer assets, semantic comparison for tolerant search outputs.
 - Regeneration should be run once with network access to warm assets, then rerun in a no-network environment when Phase 0 pinning is tightened further.
 
 ## Zero-Network Goal
