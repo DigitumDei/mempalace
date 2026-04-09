@@ -19,11 +19,14 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "phase0"
-INPUT_ROOT = FIXTURE_ROOT / "inputs"
-GOLDEN_ROOT = FIXTURE_ROOT / "goldens"
-INVENTORY_ROOT = FIXTURE_ROOT / "inventory"
-LOCK_PATH = FIXTURE_ROOT / "fixture-lock.json"
+SOURCE_FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "phase0"
+OUTPUT_FIXTURE_ROOT = Path(
+    os.environ.get("MEMPALACE_PHASE0_OUTPUT_ROOT", str(SOURCE_FIXTURE_ROOT))
+).resolve()
+INPUT_ROOT = SOURCE_FIXTURE_ROOT / "inputs"
+GOLDEN_ROOT = OUTPUT_FIXTURE_ROOT / "goldens"
+INVENTORY_ROOT = OUTPUT_FIXTURE_ROOT / "inventory"
+LOCK_PATH = OUTPUT_FIXTURE_ROOT / "fixture-lock.json"
 SANITIZED_HOME = "/tmp/mempalace-phase0-home"
 SANITIZED_PALACE_PATH = f"{SANITIZED_HOME}/.mempalace/palace"
 TOLERANT_OUTPUTS = {
@@ -62,6 +65,10 @@ def _run_help(args: list[str], env: dict[str, str]) -> str:
         text=True,
         check=False,
     )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"help command failed for {args!r} with exit {proc.returncode}: {proc.stderr.strip()}"
+        )
     return proc.stdout
 
 
@@ -124,13 +131,14 @@ def _normalize_search_results(results: list[dict[str, object]]) -> list[dict[str
 
 
 def _normalize_mcp_search_contract(payload: dict[str, object]) -> dict[str, object]:
-    content = payload.get("result", {}).get("content", [])
+    normalized_payload = json.loads(json.dumps(payload))
+    content = normalized_payload.get("result", {}).get("content", [])
     if not content:
-        return payload
+        return normalized_payload
 
     first = content[0]
     if not isinstance(first, dict) or first.get("type") != "text":
-        return payload
+        return normalized_payload
 
     search_payload = json.loads(first["text"])
     normalized_search = {
@@ -138,8 +146,10 @@ def _normalize_mcp_search_contract(payload: dict[str, object]) -> dict[str, obje
         "filters": search_payload["filters"],
         "results": _normalize_search_results(search_payload["results"]),
     }
-    payload["result"]["content"][0]["text"] = json.dumps(normalized_search, indent=2, sort_keys=True)
-    return payload
+    normalized_payload["result"]["content"][0]["text"] = json.dumps(
+        normalized_search, indent=2, sort_keys=True
+    )
+    return normalized_payload
 
 
 def main() -> int:
@@ -423,11 +433,12 @@ def main() -> int:
             if path.is_file()
         }
         generated_hashes = {
-            str(path.relative_to(FIXTURE_ROOT)): _sha256(path)
-            for path in sorted((FIXTURE_ROOT).rglob("*"))
+            str(path.relative_to(OUTPUT_FIXTURE_ROOT)): _sha256(path)
+            for root in (GOLDEN_ROOT, INVENTORY_ROOT)
+            for path in sorted(root.rglob("*"))
             if path.is_file()
             and path != LOCK_PATH
-            and str(path.relative_to(FIXTURE_ROOT)) not in TOLERANT_OUTPUTS
+            and str(path.relative_to(OUTPUT_FIXTURE_ROOT)) not in TOLERANT_OUTPUTS
         }
         _write_json(
             LOCK_PATH,

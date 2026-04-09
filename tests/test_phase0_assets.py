@@ -1,9 +1,13 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+from scripts import check_phase0_drift
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +63,7 @@ def test_phase0_expected_assets_exist():
 def test_phase0_fixture_lock_matches_files():
     lock = json.loads((FIXTURE_ROOT / "fixture-lock.json").read_text(encoding="utf-8"))
     assert lock["phase"] == "0"
+    assert lock["version"] == 1
     assert lock["generated_by"] == "scripts/phase0_capture.py"
     assert set(lock["tolerant_generated_files"]) == EXPECTED_TOLERANT_FILES
 
@@ -103,6 +108,25 @@ def test_phase0_json_goldens_have_expected_structure():
     assert set(mcp_search_payload) == {"filters", "query", "results"}
     assert all("similarity" not in item for item in mcp_search_payload["results"])
 
+    cli_inventory = json.loads((INVENTORY_ROOT / "cli-help.json").read_text(encoding="utf-8"))
+    assert set(cli_inventory["commands"]) == {
+        "compress",
+        "init",
+        "mine",
+        "root",
+        "search",
+        "split",
+        "status",
+        "wake-up",
+    }
+
+    mcp_inventory = json.loads((INVENTORY_ROOT / "mcp-tools.json").read_text(encoding="utf-8"))
+    assert {
+        "mempalace_get_aaak_spec",
+        "mempalace_search",
+        "mempalace_status",
+    }.issubset(mcp_inventory)
+
 
 def test_phase0_environment_inventory_is_stable_shape():
     inventory = json.loads((INVENTORY_ROOT / "environment.json").read_text(encoding="utf-8"))
@@ -114,15 +138,137 @@ def test_phase0_environment_inventory_is_stable_shape():
     assert "resolved_packages" in inventory
 
 
+def test_phase0_drift_contract_sets_match_docs():
+    assert "goldens/search-cli.txt" in check_phase0_drift.EXACT_FILES
+    assert "goldens/search-programmatic.json" in check_phase0_drift.TOLERANT_FILES
+    assert "goldens/wake-up.txt" in check_phase0_drift.TOLERANT_FILES
+    assert "goldens/wake-up-wing-code.txt" in check_phase0_drift.TOLERANT_FILES
+
+
+def test_phase0_programmatic_search_tolerance_keeps_order_and_similarity_gate():
+    with tempfile.TemporaryDirectory() as before_str, tempfile.TemporaryDirectory() as after_str:
+        before_root = Path(before_str)
+        after_root = Path(after_str)
+        rel_path = "goldens/search-programmatic.json"
+        for root in (before_root, after_root):
+            (root / "goldens").mkdir(parents=True, exist_ok=True)
+
+        baseline = {
+            "unfiltered": {
+                "query": "auth migration parity",
+                "filters": {"wing": None, "room": None},
+                "results": [
+                    {
+                        "wing": "wing_team",
+                        "room": "auth-migration",
+                        "source_file": "team.txt",
+                        "text": "alpha",
+                        "similarity": 0.49,
+                    },
+                    {
+                        "wing": "wing_code",
+                        "room": "auth-migration",
+                        "source_file": "code.txt",
+                        "text": "beta",
+                        "similarity": 0.07,
+                    },
+                ],
+            }
+        }
+        (before_root / rel_path).write_text(json.dumps(baseline), encoding="utf-8")
+
+        tolerated = json.loads(json.dumps(baseline))
+        tolerated["unfiltered"]["results"][0]["similarity"] = 0.46
+        (after_root / rel_path).write_text(json.dumps(tolerated), encoding="utf-8")
+        assert check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+
+        reordered = json.loads(json.dumps(baseline))
+        reordered["unfiltered"]["results"] = list(reversed(reordered["unfiltered"]["results"]))
+        (after_root / rel_path).write_text(json.dumps(reordered), encoding="utf-8")
+        assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+
+        widened = json.loads(json.dumps(baseline))
+        widened["unfiltered"]["results"][0]["similarity"] = 0.30
+        (after_root / rel_path).write_text(json.dumps(widened), encoding="utf-8")
+        assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+
+
+def test_phase0_wake_up_tolerance_requires_structure():
+    with tempfile.TemporaryDirectory() as before_str, tempfile.TemporaryDirectory() as after_str:
+        before_root = Path(before_str)
+        after_root = Path(after_str)
+        rel_path = "goldens/wake-up.txt"
+        for root in (before_root, after_root):
+            (root / "goldens").mkdir(parents=True, exist_ok=True)
+
+        baseline = (GOLDEN_ROOT / "wake-up.txt").read_text(encoding="utf-8")
+        (before_root / rel_path).write_text(baseline, encoding="utf-8")
+        variant = baseline.replace("[auth-migration]", "[release-readiness]", 1)
+        (after_root / rel_path).write_text(variant, encoding="utf-8")
+        assert check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
+
+        broken = "\n".join(baseline.splitlines()[:6]) + "\n"
+        (after_root / rel_path).write_text(broken, encoding="utf-8")
+        assert not check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
+
+
+def test_phase0_drift_script_does_not_modify_workspace(tmp_path):
+    temp_fixture_root = tmp_path / "phase0"
+    shutil.copytree(FIXTURE_ROOT, temp_fixture_root)
+    baseline = {
+        str(path.relative_to(temp_fixture_root)): path.read_bytes()
+        for path in sorted(temp_fixture_root.rglob("*"))
+        if path.is_file()
+    }
+
+    drift = check_phase0_drift._load_tree(temp_fixture_root)
+    drift["goldens/search-cli.txt"] = drift["goldens/search-cli.txt"] + b"\nDRIFT\n"
+
+    failures = []
+    changed_files = sorted(set(baseline) | set(drift))
+    for rel in changed_files:
+        if rel not in baseline or rel not in drift:
+            failures.append(rel)
+            continue
+        if rel in check_phase0_drift.EXACT_FILES and baseline[rel] != drift[rel]:
+            failures.append(rel)
+
+    assert failures == ["goldens/search-cli.txt"]
+    after = {
+        str(path.relative_to(temp_fixture_root)): path.read_bytes()
+        for path in sorted(temp_fixture_root.rglob("*"))
+        if path.is_file()
+    }
+    assert after == baseline
+
+
 def test_phase0_drift_script_is_stable_when_vendor_env_exists():
     vendor = ROOT / ".phase0_vendor"
     if not vendor.exists():
         return
 
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                f"sys.path.insert(0, {str(vendor)!r}); "
+                "import chromadb"
+            ),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode != 0:
+        return
+
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(vendor), str(ROOT), env.get("PYTHONPATH", "")]
-    ).strip(os.pathsep)
+    env["PYTHONPATH"] = os.pathsep.join([str(vendor), str(ROOT), env.get("PYTHONPATH", "")]).strip(
+        os.pathsep
+    )
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "check_phase0_drift.py")],
         cwd=ROOT,

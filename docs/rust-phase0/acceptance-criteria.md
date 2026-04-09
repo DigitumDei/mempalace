@@ -38,5 +38,6 @@
 ## Environment And Drift
 
 - The reference environment doc states Python version, dependency inputs, and model warm-up requirements.
-- Drift check fails if regenerated exact-contract inventories or goldens differ byte-for-byte from committed snapshots, and if tolerant search surfaces drift semantically.
+- Drift check regenerates into a disposable output tree, leaving committed fixtures untouched.
+- Drift check fails if regenerated exact-contract inventories or goldens differ byte-for-byte from committed snapshots, and if tolerant search or wake-up surfaces drift semantically.
 - Regeneration must target a disposable local palace path and disposable HOME directory.
