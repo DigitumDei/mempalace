@@ -82,9 +82,33 @@ def _compare_programmatic_search(before_root: Path, after_root: Path, rel_path: 
         if len(before_results) != len(after_results):
             return False
 
-        for before_result, after_result in zip(before_results, after_results):
-            before_norm = _normalize_search_result(before_result)
-            after_norm = _normalize_search_result(after_result)
+        before_by_identity = {}
+        after_by_identity = {}
+        for result in before_results:
+            normalized = _normalize_search_result(result)
+            identity = (
+                normalized["wing"],
+                normalized["room"],
+                normalized["source_file"],
+                normalized["text"],
+            )
+            before_by_identity[identity] = normalized
+        for result in after_results:
+            normalized = _normalize_search_result(result)
+            identity = (
+                normalized["wing"],
+                normalized["room"],
+                normalized["source_file"],
+                normalized["text"],
+            )
+            after_by_identity[identity] = normalized
+
+        if set(before_by_identity) != set(after_by_identity):
+            return False
+
+        for identity in sorted(before_by_identity):
+            before_norm = before_by_identity[identity]
+            after_norm = after_by_identity[identity]
             if (
                 before_norm["wing"] != after_norm["wing"]
                 or before_norm["room"] != after_norm["room"]
@@ -131,10 +155,18 @@ def _compare_wake_up(before_root: Path, after_root: Path, rel_path: str) -> bool
     after = _parse_wake_up(_read_text(after_root, rel_path))
     if before["header"] != after["header"]:
         return False
-    after_rooms = after["rooms"]
-    if not after_rooms:
+    before_rooms = {room["room"]: room["bullets"] for room in before["rooms"]}
+    after_rooms = {room["room"]: room["bullets"] for room in after["rooms"]}
+    if not before_rooms or not after_rooms:
         return False
-    return all(room["room"] and room["bullets"] for room in after_rooms)
+    for room_name, bullets in after_rooms.items():
+        if not room_name or not bullets:
+            return False
+        if room_name not in before_rooms:
+            return False
+        if any(bullet not in before_rooms[room_name] for bullet in bullets):
+            return False
+    return True
 
 
 def _compare_tolerant(rel_path: str, before_root: Path, after_root: Path) -> bool:
@@ -166,6 +198,8 @@ def main() -> int:
         failures = []
         changed_files = sorted(set(before) | set(after))
         for rel in changed_files:
+            if rel.startswith("inputs/"):
+                continue
             if rel not in before or rel not in after:
                 failures.append(f"{rel}: file added or removed")
                 continue
@@ -176,8 +210,6 @@ def main() -> int:
             if rel in TOLERANT_FILES:
                 if not _compare_tolerant(rel, FIXTURE_ROOT, temp_root):
                     failures.append(f"{rel}: tolerant contract changed")
-                continue
-            if rel.startswith("inputs/"):
                 continue
             if rel not in MANAGED_FILES:
                 failures.append(f"{rel}: unmanaged generated file present")

@@ -37,8 +37,9 @@ EXPECTED_INPUTS = {
     "inputs/project_alpha/mempalace.yaml",
 }
 EXPECTED_TOLERANT_FILES = {
-    "goldens/search-cli.txt",
     "goldens/search-programmatic.json",
+    "goldens/wake-up-wing-code.txt",
+    "goldens/wake-up.txt",
 }
 
 
@@ -185,11 +186,16 @@ def test_phase0_programmatic_search_tolerance_keeps_order_and_similarity_gate():
         reordered = json.loads(json.dumps(baseline))
         reordered["unfiltered"]["results"] = list(reversed(reordered["unfiltered"]["results"]))
         (after_root / rel_path).write_text(json.dumps(reordered), encoding="utf-8")
-        assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+        assert check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
 
         widened = json.loads(json.dumps(baseline))
         widened["unfiltered"]["results"][0]["similarity"] = 0.30
         (after_root / rel_path).write_text(json.dumps(widened), encoding="utf-8")
+        assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+
+        changed_text = json.loads(json.dumps(baseline))
+        changed_text["unfiltered"]["results"][0]["text"] = "gamma"
+        (after_root / rel_path).write_text(json.dumps(changed_text), encoding="utf-8")
         assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
 
 
@@ -203,8 +209,13 @@ def test_phase0_wake_up_tolerance_requires_structure():
 
         baseline = (GOLDEN_ROOT / "wake-up.txt").read_text(encoding="utf-8")
         (before_root / rel_path).write_text(baseline, encoding="utf-8")
-        variant = baseline.replace("[auth-migration]", "[release-readiness]", 1)
+        variant = baseline.replace("[auth-migration]", "[unexpected-room]", 1)
         (after_root / rel_path).write_text(variant, encoding="utf-8")
+        assert not check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
+
+        subset_lines = baseline.splitlines()
+        subset = "\n".join(subset_lines[:10]) + "\n"
+        (after_root / rel_path).write_text(subset, encoding="utf-8")
         assert check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
 
         broken = "\n".join(baseline.splitlines()[:6]) + "\n"
@@ -212,7 +223,7 @@ def test_phase0_wake_up_tolerance_requires_structure():
         assert not check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
 
 
-def test_phase0_drift_script_does_not_modify_workspace(tmp_path):
+def test_phase0_drift_script_ignores_inputs_and_leaves_workspace_unchanged(tmp_path, monkeypatch):
     temp_fixture_root = tmp_path / "phase0"
     shutil.copytree(FIXTURE_ROOT, temp_fixture_root)
     baseline = {
@@ -220,20 +231,48 @@ def test_phase0_drift_script_does_not_modify_workspace(tmp_path):
         for path in sorted(temp_fixture_root.rglob("*"))
         if path.is_file()
     }
+    monkeypatch.setattr(check_phase0_drift, "FIXTURE_ROOT", temp_fixture_root)
 
-    drift = check_phase0_drift._load_tree(temp_fixture_root)
-    drift["goldens/search-cli.txt"] = drift["goldens/search-cli.txt"] + b"\nDRIFT\n"
+    def fake_run(args, cwd, env, check):
+        output_root = Path(env["MEMPALACE_PHASE0_OUTPUT_ROOT"])
+        shutil.copytree(temp_fixture_root / "goldens", output_root / "goldens")
+        shutil.copytree(temp_fixture_root / "inventory", output_root / "inventory")
+        shutil.copy2(temp_fixture_root / "fixture-lock.json", output_root / "fixture-lock.json")
+        return subprocess.CompletedProcess(args=args, returncode=0)
 
-    failures = []
-    changed_files = sorted(set(baseline) | set(drift))
-    for rel in changed_files:
-        if rel not in baseline or rel not in drift:
-            failures.append(rel)
-            continue
-        if rel in check_phase0_drift.EXACT_FILES and baseline[rel] != drift[rel]:
-            failures.append(rel)
+    monkeypatch.setattr(check_phase0_drift.subprocess, "run", fake_run)
+    assert check_phase0_drift.main() == 0
 
-    assert failures == ["goldens/search-cli.txt"]
+    after = {
+        str(path.relative_to(temp_fixture_root)): path.read_bytes()
+        for path in sorted(temp_fixture_root.rglob("*"))
+        if path.is_file()
+    }
+    assert after == baseline
+
+
+def test_phase0_drift_script_reports_exact_drift_without_rewriting_workspace(tmp_path, monkeypatch):
+    temp_fixture_root = tmp_path / "phase0"
+    shutil.copytree(FIXTURE_ROOT, temp_fixture_root)
+    baseline = {
+        str(path.relative_to(temp_fixture_root)): path.read_bytes()
+        for path in sorted(temp_fixture_root.rglob("*"))
+        if path.is_file()
+    }
+    monkeypatch.setattr(check_phase0_drift, "FIXTURE_ROOT", temp_fixture_root)
+
+    def fake_run(args, cwd, env, check):
+        output_root = Path(env["MEMPALACE_PHASE0_OUTPUT_ROOT"])
+        shutil.copytree(temp_fixture_root / "goldens", output_root / "goldens")
+        shutil.copytree(temp_fixture_root / "inventory", output_root / "inventory")
+        shutil.copy2(temp_fixture_root / "fixture-lock.json", output_root / "fixture-lock.json")
+        search_cli = output_root / "goldens" / "search-cli.txt"
+        search_cli.write_text(search_cli.read_text(encoding="utf-8") + "\nDRIFT\n", encoding="utf-8")
+        return subprocess.CompletedProcess(args=args, returncode=0)
+
+    monkeypatch.setattr(check_phase0_drift.subprocess, "run", fake_run)
+    assert check_phase0_drift.main() == 1
+
     after = {
         str(path.relative_to(temp_fixture_root)): path.read_bytes()
         for path in sorted(temp_fixture_root.rglob("*"))

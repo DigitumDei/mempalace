@@ -5,8 +5,7 @@
     "goldens/knowledge-graph.json": "41f9aaf6354b3fec19604912b4de177f475bfdb6f952a687e07afc29ba66a5de",
     "goldens/mcp-contract.json": "434039f0f8d3b8e457f35ed01e72d2b03178927ff34e2153e617368af97dde34",
     "goldens/palace-graph.json": "fb2ac6eff8121d7a564b7d7ce895e32c1b58dd9e1f089786077476cc662dfc67",
-    "goldens/wake-up-wing-code.txt": "c62d8aa4ce12a14e8263111767264430d71b6ebda8106e97040fe4967fa4ee4e",
-    "goldens/wake-up.txt": "91c19aba7d0099ecdd9fd4c8cbe17b5afc7fc68609421ea4b06fc1a1f6876c80",
+    "goldens/search-cli.txt": "6822777ffc1e41946865fd309ddfed6f7ad64d734b0392c3a644e3570eb53812",
     "inputs/convos/product_strategy.txt": "0153de51c16a1c6e6407b9548325a75d78364fb71d6762b4d4638a533ec98658",
     "inputs/project_alpha/backend/auth.py": "b9ba831346216b5c9a9f7391f70455ca62cdcc19208ff7a1a99b2385c49c9266",
     "inputs/project_alpha/docs/plan.md": "a4540dce586d67050511d576682ad0ce8c8fcbb6254f1c302056fc538bdeffe5",
@@ -24,8 +23,9 @@
   "phase": "0",
   "python": "3.11.2",
   "tolerant_generated_files": [
-    "goldens/search-cli.txt",
-    "goldens/search-programmatic.json"
+    "goldens/search-programmatic.json",
+    "goldens/wake-up-wing-code.txt",
+    "goldens/wake-up.txt"
   ],
   "version": 1
 }

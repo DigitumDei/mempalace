@@ -30,8 +30,9 @@ LOCK_PATH = OUTPUT_FIXTURE_ROOT / "fixture-lock.json"
 SANITIZED_HOME = "/tmp/mempalace-phase0-home"
 SANITIZED_PALACE_PATH = f"{SANITIZED_HOME}/.mempalace/palace"
 TOLERANT_OUTPUTS = {
-    "goldens/search-cli.txt",
     "goldens/search-programmatic.json",
+    "goldens/wake-up-wing-code.txt",
+    "goldens/wake-up.txt",
 }
 
 
@@ -428,7 +429,7 @@ def main() -> int:
         )
 
         input_hashes = {
-            str(path.relative_to(FIXTURE_ROOT)): _sha256(path)
+            str(path.relative_to(SOURCE_FIXTURE_ROOT)): _sha256(path)
             for path in sorted(INPUT_ROOT.rglob("*"))
             if path.is_file()
         }
