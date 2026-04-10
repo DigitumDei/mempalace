@@ -6,6 +6,7 @@
 - A committed golden corpus exists under `tests/fixtures/phase0/goldens/`.
 - A fixture lock manifest exists and records the reference environment plus input file hashes.
 - Regeneration and drift-check commands are documented and scriptable.
+- Any deterministic in-script seed data required to exercise a contract surface is documented explicitly in the Phase 0 docs.
 
 ## CLI
 
