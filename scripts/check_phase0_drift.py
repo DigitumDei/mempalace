@@ -106,6 +106,9 @@ def _compare_programmatic_search(before_root: Path, after_root: Path, rel_path: 
         if set(before_by_identity) != set(after_by_identity):
             return False
 
+        before_positions = {identity: index for index, identity in enumerate(before_by_identity)}
+        after_positions = {identity: index for index, identity in enumerate(after_by_identity)}
+
         for identity in sorted(before_by_identity):
             before_norm = before_by_identity[identity]
             after_norm = after_by_identity[identity]
@@ -120,6 +123,20 @@ def _compare_programmatic_search(before_root: Path, after_root: Path, rel_path: 
                 if "similarity" not in before_norm or "similarity" not in after_norm:
                     return False
                 if abs(before_norm["similarity"] - after_norm["similarity"]) > SEARCH_SIMILARITY_TOLERANCE:
+                    return False
+
+        ordered_before = list(before_by_identity)
+        for index, higher_identity in enumerate(ordered_before):
+            higher_similarity = before_by_identity[higher_identity].get("similarity")
+            if higher_similarity is None:
+                continue
+            for lower_identity in ordered_before[index + 1 :]:
+                lower_similarity = before_by_identity[lower_identity].get("similarity")
+                if lower_similarity is None:
+                    continue
+                if higher_similarity - lower_similarity <= SEARCH_SIMILARITY_TOLERANCE:
+                    continue
+                if after_positions[higher_identity] > after_positions[lower_identity]:
                     return False
     return True
 
@@ -159,12 +176,15 @@ def _compare_wake_up(before_root: Path, after_root: Path, rel_path: str) -> bool
     after_rooms = {room["room"]: room["bullets"] for room in after["rooms"]}
     if not before_rooms or not after_rooms:
         return False
-    for room_name, bullets in after_rooms.items():
+    if set(before_rooms) != set(after_rooms):
+        return False
+    for room_name, bullets in before_rooms.items():
         if not room_name or not bullets:
             return False
-        if room_name not in before_rooms:
+        after_bullets = after_rooms.get(room_name)
+        if not after_bullets:
             return False
-        if any(bullet not in before_rooms[room_name] for bullet in bullets):
+        if set(bullets) != set(after_bullets):
             return False
     return True
 

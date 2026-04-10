@@ -77,9 +77,9 @@ def test_phase0_fixture_lock_matches_files():
 
     actual_generated_hashes = {
         str(path.relative_to(FIXTURE_ROOT)): _sha256(path)
-        for path in sorted(FIXTURE_ROOT.rglob("*"))
+        for root in (GOLDEN_ROOT, INVENTORY_ROOT)
+        for path in sorted(root.rglob("*"))
         if path.is_file()
-        and path != FIXTURE_ROOT / "fixture-lock.json"
         and str(path.relative_to(FIXTURE_ROOT)) not in EXPECTED_TOLERANT_FILES
     }
     assert lock["generated_hashes"] == actual_generated_hashes
@@ -186,7 +186,18 @@ def test_phase0_programmatic_search_tolerance_keeps_order_and_similarity_gate():
         reordered = json.loads(json.dumps(baseline))
         reordered["unfiltered"]["results"] = list(reversed(reordered["unfiltered"]["results"]))
         (after_root / rel_path).write_text(json.dumps(reordered), encoding="utf-8")
+        assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+
+        tied = json.loads(json.dumps(baseline))
+        tied["unfiltered"]["results"][0]["similarity"] = 0.10
+        tied["unfiltered"]["results"][1]["similarity"] = 0.08
+        (before_root / rel_path).write_text(json.dumps(tied), encoding="utf-8")
+        reordered_tied = json.loads(json.dumps(tied))
+        reordered_tied["unfiltered"]["results"] = list(reversed(reordered_tied["unfiltered"]["results"]))
+        (after_root / rel_path).write_text(json.dumps(reordered_tied), encoding="utf-8")
         assert check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+
+        (before_root / rel_path).write_text(json.dumps(baseline), encoding="utf-8")
 
         widened = json.loads(json.dumps(baseline))
         widened["unfiltered"]["results"][0]["similarity"] = 0.30
@@ -216,7 +227,15 @@ def test_phase0_wake_up_tolerance_requires_structure():
         subset_lines = baseline.splitlines()
         subset = "\n".join(subset_lines[:10]) + "\n"
         (after_root / rel_path).write_text(subset, encoding="utf-8")
-        assert check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
+        assert not check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
+
+        missing_bullet = baseline.replace(
+            "  - Code notes: auth-migration keeps search filter semantics exact while storage changes underneath.  (code.txt)\n",
+            "",
+            1,
+        )
+        (after_root / rel_path).write_text(missing_bullet, encoding="utf-8")
+        assert not check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
 
         broken = "\n".join(baseline.splitlines()[:6]) + "\n"
         (after_root / rel_path).write_text(broken, encoding="utf-8")
