@@ -20,7 +20,7 @@
     ]
   },
   "python_implementation": "CPython",
-  "python_version": "3.11.2",
+  "python_version": "3.11",
   "resolved_packages": {
     "PyYAML": "6.0.3",
     "chromadb": "1.5.7",

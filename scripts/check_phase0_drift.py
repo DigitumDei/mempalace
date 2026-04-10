@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,18 +21,21 @@ EXACT_FILES = {
     "goldens/knowledge-graph.json",
     "goldens/mcp-contract.json",
     "goldens/palace-graph.json",
-    "goldens/search-cli.txt",
     "inventory/cli-help.json",
     "inventory/environment.json",
     "inventory/mcp-tools.json",
 }
 TOLERANT_FILES = {
+    "goldens/search-cli.txt",
     "goldens/search-programmatic.json",
     "goldens/wake-up-wing-code.txt",
     "goldens/wake-up.txt",
 }
 MANAGED_FILES = EXACT_FILES | TOLERANT_FILES
 SEARCH_SIMILARITY_TOLERANCE = 0.05
+CLI_RESULT_HEADER = re.compile(r"^  \[(?P<index>\d+)\] (?P<wing>.+) / (?P<room>.+)$")
+CLI_SOURCE_LINE = re.compile(r"^      Source: (?P<source>.+)$")
+CLI_MATCH_LINE = re.compile(r"^      Match:  (?P<similarity>-?\d+(?:\.\d+)?)$")
 
 
 def _load_json(path: Path) -> object:
@@ -50,6 +54,13 @@ def _read_text(root: Path, rel_path: str) -> str:
     return (root / rel_path).read_text(encoding="utf-8")
 
 
+def _python_series(version: str) -> str:
+    parts = version.split(".")
+    if len(parts) < 2:
+        return version
+    return ".".join(parts[:2])
+
+
 def _normalize_search_result(result: dict[str, object]) -> dict[str, object]:
     normalized = {
         "wing": result.get("wing"),
@@ -61,6 +72,156 @@ def _normalize_search_result(result: dict[str, object]) -> dict[str, object]:
     if similarity is not None:
         normalized["similarity"] = float(similarity)
     return normalized
+
+
+def _normalize_cli_result(result: dict[str, object]) -> dict[str, object]:
+    normalized = {
+        "wing": result["wing"],
+        "room": result["room"],
+        "source_file": result["source_file"],
+        "body": list(result["body"]),
+    }
+    similarity = result.get("similarity")
+    if similarity is not None:
+        normalized["similarity"] = float(similarity)
+    return normalized
+
+
+def _compare_ranked_results(
+    before_results: list[dict[str, object]], after_results: list[dict[str, object]]
+) -> bool:
+    if len(before_results) != len(after_results):
+        return False
+
+    before_by_identity = {}
+    after_by_identity = {}
+    for result in before_results:
+        identity = [result["wing"], result["room"], result["source_file"]]
+        if "text" in result:
+            identity.append(result["text"])
+        identity.extend(result.get("body", []))
+        identity = tuple(identity)
+        before_by_identity[identity] = result
+    for result in after_results:
+        identity = [result["wing"], result["room"], result["source_file"]]
+        if "text" in result:
+            identity.append(result["text"])
+        identity.extend(result.get("body", []))
+        identity = tuple(identity)
+        after_by_identity[identity] = result
+
+    if set(before_by_identity) != set(after_by_identity):
+        return False
+
+    before_positions = {identity: index for index, identity in enumerate(before_by_identity)}
+    after_positions = {identity: index for index, identity in enumerate(after_by_identity)}
+
+    for identity in sorted(before_by_identity):
+        before_norm = before_by_identity[identity]
+        after_norm = after_by_identity[identity]
+        if (
+            before_norm["wing"] != after_norm["wing"]
+            or before_norm["room"] != after_norm["room"]
+            or before_norm["source_file"] != after_norm["source_file"]
+            or before_norm.get("body", []) != after_norm.get("body", [])
+        ):
+            return False
+        if "similarity" in before_norm or "similarity" in after_norm:
+            if "similarity" not in before_norm or "similarity" not in after_norm:
+                return False
+            if abs(before_norm["similarity"] - after_norm["similarity"]) > SEARCH_SIMILARITY_TOLERANCE:
+                return False
+
+    ordered_before = list(before_by_identity)
+    for index, higher_identity in enumerate(ordered_before):
+        higher_similarity = before_by_identity[higher_identity].get("similarity")
+        if higher_similarity is None:
+            continue
+        for lower_identity in ordered_before[index + 1 :]:
+            lower_similarity = before_by_identity[lower_identity].get("similarity")
+            if lower_similarity is None:
+                continue
+            if higher_similarity - lower_similarity <= SEARCH_SIMILARITY_TOLERANCE:
+                continue
+            if after_positions[higher_identity] > after_positions[lower_identity]:
+                return False
+    return True
+
+
+def _parse_search_cli(text: str) -> dict[str, object] | None:
+    lines = text.splitlines()
+    first_result_index = None
+    for index, line in enumerate(lines):
+        if CLI_RESULT_HEADER.match(line):
+            first_result_index = index
+            break
+
+    if first_result_index is None:
+        return {"header": lines, "results": []}
+
+    header = lines[:first_result_index]
+    results = []
+    index = first_result_index
+    while index < len(lines):
+        if not lines[index]:
+            index += 1
+            continue
+
+        header_match = CLI_RESULT_HEADER.match(lines[index])
+        if header_match is None:
+            return None
+        if index + 2 >= len(lines):
+            return None
+        source_match = CLI_SOURCE_LINE.match(lines[index + 1])
+        similarity_match = CLI_MATCH_LINE.match(lines[index + 2])
+        if source_match is None or similarity_match is None:
+            return None
+
+        index += 3
+        if index >= len(lines) or lines[index] != "":
+            return None
+        index += 1
+
+        body = []
+        while index < len(lines) and lines[index] != "":
+            if not lines[index].startswith("      "):
+                return None
+            body.append(lines[index][6:])
+            index += 1
+
+        if not body:
+            return None
+        if index >= len(lines) or lines[index] != "":
+            return None
+        index += 1
+
+        if index >= len(lines) or lines[index] != f"  {'─' * 56}":
+            return None
+        index += 1
+
+        results.append(
+            {
+                "wing": header_match.group("wing"),
+                "room": header_match.group("room"),
+                "source_file": source_match.group("source"),
+                "similarity": float(similarity_match.group("similarity")),
+                "body": body,
+            }
+        )
+
+    return {"header": header, "results": results}
+
+
+def _compare_search_cli(before_root: Path, after_root: Path, rel_path: str) -> bool:
+    before = _parse_search_cli(_read_text(before_root, rel_path))
+    after = _parse_search_cli(_read_text(after_root, rel_path))
+    if before is None or after is None:
+        return False
+    if before["header"] != after["header"]:
+        return False
+    before_results = [_normalize_cli_result(result) for result in before["results"]]
+    after_results = [_normalize_cli_result(result) for result in after["results"]]
+    return _compare_ranked_results(before_results, after_results)
 
 
 def _compare_programmatic_search(before_root: Path, after_root: Path, rel_path: str) -> bool:
@@ -79,65 +240,10 @@ def _compare_programmatic_search(before_root: Path, after_root: Path, rel_path: 
 
         before_results = before_entry.get("results", [])
         after_results = after_entry.get("results", [])
-        if len(before_results) != len(after_results):
+        before_normalized = [_normalize_search_result(result) for result in before_results]
+        after_normalized = [_normalize_search_result(result) for result in after_results]
+        if not _compare_ranked_results(before_normalized, after_normalized):
             return False
-
-        before_by_identity = {}
-        after_by_identity = {}
-        for result in before_results:
-            normalized = _normalize_search_result(result)
-            identity = (
-                normalized["wing"],
-                normalized["room"],
-                normalized["source_file"],
-                normalized["text"],
-            )
-            before_by_identity[identity] = normalized
-        for result in after_results:
-            normalized = _normalize_search_result(result)
-            identity = (
-                normalized["wing"],
-                normalized["room"],
-                normalized["source_file"],
-                normalized["text"],
-            )
-            after_by_identity[identity] = normalized
-
-        if set(before_by_identity) != set(after_by_identity):
-            return False
-
-        before_positions = {identity: index for index, identity in enumerate(before_by_identity)}
-        after_positions = {identity: index for index, identity in enumerate(after_by_identity)}
-
-        for identity in sorted(before_by_identity):
-            before_norm = before_by_identity[identity]
-            after_norm = after_by_identity[identity]
-            if (
-                before_norm["wing"] != after_norm["wing"]
-                or before_norm["room"] != after_norm["room"]
-                or before_norm["source_file"] != after_norm["source_file"]
-                or before_norm["text"] != after_norm["text"]
-            ):
-                return False
-            if "similarity" in before_norm or "similarity" in after_norm:
-                if "similarity" not in before_norm or "similarity" not in after_norm:
-                    return False
-                if abs(before_norm["similarity"] - after_norm["similarity"]) > SEARCH_SIMILARITY_TOLERANCE:
-                    return False
-
-        ordered_before = list(before_by_identity)
-        for index, higher_identity in enumerate(ordered_before):
-            higher_similarity = before_by_identity[higher_identity].get("similarity")
-            if higher_similarity is None:
-                continue
-            for lower_identity in ordered_before[index + 1 :]:
-                lower_similarity = before_by_identity[lower_identity].get("similarity")
-                if lower_similarity is None:
-                    continue
-                if higher_similarity - lower_similarity <= SEARCH_SIMILARITY_TOLERANCE:
-                    continue
-                if after_positions[higher_identity] > after_positions[lower_identity]:
-                    return False
     return True
 
 
@@ -174,6 +280,8 @@ def _compare_wake_up(before_root: Path, after_root: Path, rel_path: str) -> bool
         return False
     before_rooms = {room["room"]: room["bullets"] for room in before["rooms"]}
     after_rooms = {room["room"]: room["bullets"] for room in after["rooms"]}
+    if not before_rooms and not after_rooms:
+        return True
     if not before_rooms or not after_rooms:
         return False
     if set(before_rooms) != set(after_rooms):
@@ -190,6 +298,8 @@ def _compare_wake_up(before_root: Path, after_root: Path, rel_path: str) -> bool
 
 
 def _compare_tolerant(rel_path: str, before_root: Path, after_root: Path) -> bool:
+    if rel_path.endswith("search-cli.txt"):
+        return _compare_search_cli(before_root, after_root, rel_path)
     if rel_path.endswith("search-programmatic.json"):
         return _compare_programmatic_search(before_root, after_root, rel_path)
     if rel_path.endswith("wake-up.txt") or rel_path.endswith("wake-up-wing-code.txt"):

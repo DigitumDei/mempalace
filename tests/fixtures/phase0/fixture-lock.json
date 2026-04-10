@@ -5,9 +5,8 @@
     "goldens/knowledge-graph.json": "41f9aaf6354b3fec19604912b4de177f475bfdb6f952a687e07afc29ba66a5de",
     "goldens/mcp-contract.json": "434039f0f8d3b8e457f35ed01e72d2b03178927ff34e2153e617368af97dde34",
     "goldens/palace-graph.json": "fb2ac6eff8121d7a564b7d7ce895e32c1b58dd9e1f089786077476cc662dfc67",
-    "goldens/search-cli.txt": "6822777ffc1e41946865fd309ddfed6f7ad64d734b0392c3a644e3570eb53812",
     "inventory/cli-help.json": "2592f920cd18bc6df625474721d4564120d8b537a3f2de3bfe57c5db74129579",
-    "inventory/environment.json": "570cf939c3812c924da8abdd9a73956b63ef73c3c6161cb80076d7ad1c875eec",
+    "inventory/environment.json": "f42db39ff92f7fd30e895796f7db4e2da00d5e02ebe6a4b917da06128dd88b53",
     "inventory/mcp-tools.json": "ce906cdbac2128ca75fae4261acfcbb335958e7d1446bd6a6182d601990ae930"
   },
   "input_hashes": {
@@ -17,8 +16,9 @@
     "inputs/project_alpha/mempalace.yaml": "6fb9b86c165722382d670661a4dab6d7e0aa2f8859b62e427e359e00a1458e03"
   },
   "phase": "0",
-  "python": "3.11.2",
+  "python": "3.11",
   "tolerant_generated_files": [
+    "goldens/search-cli.txt",
     "goldens/search-programmatic.json",
     "goldens/wake-up-wing-code.txt",
     "goldens/wake-up.txt"

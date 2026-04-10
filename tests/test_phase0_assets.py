@@ -5,9 +5,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
+import pytest
+
 from scripts import check_phase0_drift
+from scripts import phase0_capture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +41,7 @@ EXPECTED_INPUTS = {
     "inputs/project_alpha/mempalace.yaml",
 }
 EXPECTED_TOLERANT_FILES = {
+    "goldens/search-cli.txt",
     "goldens/search-programmatic.json",
     "goldens/wake-up-wing-code.txt",
     "goldens/wake-up.txt",
@@ -132,6 +137,7 @@ def test_phase0_json_goldens_have_expected_structure():
 def test_phase0_environment_inventory_is_stable_shape():
     inventory = json.loads((INVENTORY_ROOT / "environment.json").read_text(encoding="utf-8"))
     assert inventory["python_version"]
+    assert inventory["python_version"].count(".") == 1
     assert inventory["python_implementation"]
     assert "dependency_inputs" in inventory
     assert "pyproject" in inventory["dependency_inputs"]
@@ -140,7 +146,7 @@ def test_phase0_environment_inventory_is_stable_shape():
 
 
 def test_phase0_drift_contract_sets_match_docs():
-    assert "goldens/search-cli.txt" in check_phase0_drift.EXACT_FILES
+    assert "goldens/search-cli.txt" in check_phase0_drift.TOLERANT_FILES
     assert "goldens/search-programmatic.json" in check_phase0_drift.TOLERANT_FILES
     assert "goldens/wake-up.txt" in check_phase0_drift.TOLERANT_FILES
     assert "goldens/wake-up-wing-code.txt" in check_phase0_drift.TOLERANT_FILES
@@ -210,6 +216,131 @@ def test_phase0_programmatic_search_tolerance_keeps_order_and_similarity_gate():
         assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
 
 
+def test_phase0_search_cli_tolerance_preserves_structure_and_ranking():
+    with tempfile.TemporaryDirectory() as before_str, tempfile.TemporaryDirectory() as after_str:
+        before_root = Path(before_str)
+        after_root = Path(after_str)
+        rel_path = "goldens/search-cli.txt"
+        for root in (before_root, after_root):
+            (root / "goldens").mkdir(parents=True, exist_ok=True)
+
+        baseline = "\n".join(
+            [
+                "",
+                "=" * 60,
+                '  Results for: "auth migration parity"',
+                "=" * 60,
+                "",
+                "  [1] wing_team / auth-migration",
+                "      Source: team.txt",
+                "      Match:  0.49",
+                "",
+                "      alpha",
+                "",
+                f"  {'─' * 56}",
+                "  [2] wing_code / auth-migration",
+                "      Source: code.txt",
+                "      Match:  0.07",
+                "",
+                "      beta",
+                "",
+                f"  {'─' * 56}",
+                "",
+            ]
+        )
+        (before_root / rel_path).write_text(baseline, encoding="utf-8")
+
+        tolerated = baseline.replace("0.49", "0.46", 1)
+        (after_root / rel_path).write_text(tolerated, encoding="utf-8")
+        assert check_phase0_drift._compare_search_cli(before_root, after_root, rel_path)
+
+        reordered = baseline.replace(
+            "\n".join(
+                [
+                    "  [1] wing_team / auth-migration",
+                    "      Source: team.txt",
+                    "      Match:  0.49",
+                    "",
+                    "      alpha",
+                    "",
+                    f"  {'─' * 56}",
+                    "  [2] wing_code / auth-migration",
+                    "      Source: code.txt",
+                    "      Match:  0.07",
+                    "",
+                    "      beta",
+                    "",
+                    f"  {'─' * 56}",
+                ]
+            ),
+            "\n".join(
+                [
+                    "  [1] wing_code / auth-migration",
+                    "      Source: code.txt",
+                    "      Match:  0.07",
+                    "",
+                    "      beta",
+                    "",
+                    f"  {'─' * 56}",
+                    "  [2] wing_team / auth-migration",
+                    "      Source: team.txt",
+                    "      Match:  0.49",
+                    "",
+                    "      alpha",
+                    "",
+                    f"  {'─' * 56}",
+                ]
+            ),
+            1,
+        )
+        (after_root / rel_path).write_text(reordered, encoding="utf-8")
+        assert not check_phase0_drift._compare_search_cli(before_root, after_root, rel_path)
+
+        tied = baseline.replace("0.49", "0.10", 1).replace("0.07", "0.08", 1)
+        (before_root / rel_path).write_text(tied, encoding="utf-8")
+        reordered_tied = tied.replace(
+            "\n".join(
+                [
+                    "  [1] wing_team / auth-migration",
+                    "      Source: team.txt",
+                    "      Match:  0.10",
+                    "",
+                    "      alpha",
+                    "",
+                    f"  {'─' * 56}",
+                    "  [2] wing_code / auth-migration",
+                    "      Source: code.txt",
+                    "      Match:  0.08",
+                    "",
+                    "      beta",
+                    "",
+                    f"  {'─' * 56}",
+                ]
+            ),
+            "\n".join(
+                [
+                    "  [1] wing_code / auth-migration",
+                    "      Source: code.txt",
+                    "      Match:  0.08",
+                    "",
+                    "      beta",
+                    "",
+                    f"  {'─' * 56}",
+                    "  [2] wing_team / auth-migration",
+                    "      Source: team.txt",
+                    "      Match:  0.10",
+                    "",
+                    "      alpha",
+                    "",
+                    f"  {'─' * 56}",
+                ]
+            ),
+            1,
+        )
+        (after_root / rel_path).write_text(reordered_tied, encoding="utf-8")
+        assert check_phase0_drift._compare_search_cli(before_root, after_root, rel_path)
+
+
 def test_phase0_wake_up_tolerance_requires_structure():
     with tempfile.TemporaryDirectory() as before_str, tempfile.TemporaryDirectory() as after_str:
         before_root = Path(before_str)
@@ -242,6 +373,20 @@ def test_phase0_wake_up_tolerance_requires_structure():
         assert not check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
 
 
+def test_phase0_wake_up_tolerance_allows_matching_short_outputs():
+    with tempfile.TemporaryDirectory() as before_str, tempfile.TemporaryDirectory() as after_str:
+        before_root = Path(before_str)
+        after_root = Path(after_str)
+        rel_path = "goldens/wake-up.txt"
+        for root in (before_root, after_root):
+            (root / "goldens").mkdir(parents=True, exist_ok=True)
+
+        short = "L0\nL0b\nL0c\nL0d\nL0e\n"
+        (before_root / rel_path).write_text(short, encoding="utf-8")
+        (after_root / rel_path).write_text(short, encoding="utf-8")
+        assert check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
+
+
 def test_phase0_drift_script_ignores_inputs_and_leaves_workspace_unchanged(tmp_path, monkeypatch):
     temp_fixture_root = tmp_path / "phase0"
     shutil.copytree(FIXTURE_ROOT, temp_fixture_root)
@@ -268,6 +413,304 @@ def test_phase0_drift_script_ignores_inputs_and_leaves_workspace_unchanged(tmp_p
         if path.is_file()
     }
     assert after == baseline
+
+
+def _install_phase0_capture_stubs(monkeypatch):
+    def register(name: str, module: types.ModuleType) -> None:
+        monkeypatch.setitem(sys.modules, name, module)
+
+    convo_miner = types.ModuleType("mempalace.convo_miner")
+    convo_miner.mine_convos = lambda *args, **kwargs: None
+    register("mempalace.convo_miner", convo_miner)
+
+    dialect = types.ModuleType("mempalace.dialect")
+
+    class FakeDialect:
+        def compress(self, source, metadata=None):
+            return f"AAAK::{metadata['wing']}::{metadata['room']}::{source}"
+
+        def compression_stats(self, source, rendered):
+            return {"source_len": len(source), "rendered_len": len(rendered)}
+
+    dialect.Dialect = FakeDialect
+    register("mempalace.dialect", dialect)
+
+    layers = types.ModuleType("mempalace.layers")
+
+    class FakeMemoryStack:
+        def __init__(self, palace_path, identity_path):
+            self.palace_path = palace_path
+            self.identity_path = identity_path
+
+        def wake_up(self, wing=None):
+            room_name = "auth-migration" if wing != "wing_code" else "code-focus"
+            source = "team.txt" if wing != "wing_code" else "code.txt"
+            return "\n".join(
+                [
+                    "## L0 - IDENTITY",
+                    "I am the MemPalace phase 0 reference capture.",
+                    "",
+                    "## L1 - WAKE UP",
+                    "Top drawers:",
+                    "",
+                    f"[{room_name}]",
+                    f"  - Code notes: auth-migration keeps search filter semantics exact while storage changes underneath.  ({source})",
+                    "",
+                ]
+            )
+
+    layers.MemoryStack = FakeMemoryStack
+    register("mempalace.layers", layers)
+
+    mcp_server = types.ModuleType("mempalace.mcp_server")
+    mcp_server.TOOLS = {
+        "mempalace_get_aaak_spec": {
+            "description": "Return the AAAK spec",
+            "input_schema": {"type": "object", "properties": {}},
+        },
+        "mempalace_search": {
+            "description": "Search memories",
+            "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+        },
+        "mempalace_status": {
+            "description": "Return status",
+            "input_schema": {"type": "object", "properties": {}},
+        },
+    }
+
+    def handle_request(payload):
+        method = payload["method"]
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": payload["id"], "result": {"serverInfo": {"name": "phase0"}}}
+        if method == "tools/list":
+            return {
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {"tools": [{"name": name} for name in sorted(mcp_server.TOOLS)]},
+            }
+        if method == "tools/call":
+            name = payload["params"]["name"]
+            if name == "mempalace_status":
+                return {
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {"content": [{"type": "text", "text": json.dumps({"ok": True})}]},
+                }
+            if name == "mempalace_search":
+                return {
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(
+                                    {
+                                        "query": "auth migration parity",
+                                        "filters": {"wing": None, "room": None},
+                                        "results": [
+                                            {
+                                                "wing": "wing_team",
+                                                "room": "auth-migration",
+                                                "source_file": "team.txt",
+                                                "text": "alpha",
+                                                "similarity": 0.49,
+                                            },
+                                            {
+                                                "wing": "wing_code",
+                                                "room": "auth-migration",
+                                                "source_file": "code.txt",
+                                                "text": "beta",
+                                                "similarity": 0.07,
+                                            },
+                                        ],
+                                    }
+                                ),
+                            }
+                        ]
+                    },
+                }
+            return {
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "error": {"code": -32601, "message": "unknown tool"},
+            }
+        raise AssertionError(method)
+
+    def tool_status():
+        return {"palace_path": os.environ["MEMPALACE_PALACE_PATH"]}
+
+    mcp_server.handle_request = handle_request
+    mcp_server.tool_status = tool_status
+    register("mempalace.mcp_server", mcp_server)
+
+    miner = types.ModuleType("mempalace.miner")
+
+    class FakeCollection:
+        def add(self, **kwargs):
+            self.last_add = kwargs
+
+    miner.mine = lambda *args, **kwargs: None
+    miner.get_collection = lambda path: FakeCollection()
+    register("mempalace.miner", miner)
+
+    palace_graph = types.ModuleType("mempalace.palace_graph")
+    palace_graph.traverse = lambda *args, **kwargs: [
+        {"room": "auth-migration", "hop": 0, "wings": ["wing_team"], "halls": ["hall_facts"], "count": 2},
+        {
+            "room": "phase0-rollout",
+            "hop": 1,
+            "wings": ["wing_team"],
+            "halls": ["hall_events"],
+            "count": 1,
+            "connected_via": "wing_team",
+            "recent": "2026-04-04",
+        },
+    ]
+    palace_graph.find_tunnels = lambda *args, **kwargs: [{"source": "auth-migration", "target": "phase0-rollout"}]
+    palace_graph.graph_stats = lambda *args, **kwargs: {"rooms": 2, "tunnels": 1}
+    register("mempalace.palace_graph", palace_graph)
+
+    searcher = types.ModuleType("mempalace.searcher")
+
+    def search(query, palace_path, wing=None, room=None, n_results=5):
+        print()
+        print("=" * 60)
+        print(f'  Results for: "{query}"')
+        if wing:
+            print(f"  Wing: {wing}")
+        if room:
+            print(f"  Room: {room}")
+        print("=" * 60)
+        print()
+        results = [
+            ("wing_team", "auth-migration", "team.txt", 0.49, "alpha"),
+            ("wing_code", "auth-migration", "code.txt", 0.07, "beta"),
+        ]
+        for index, (wing_name, room_name, source, similarity, body) in enumerate(results, 1):
+            print(f"  [{index}] {wing_name} / {room_name}")
+            print(f"      Source: {source}")
+            print(f"      Match:  {similarity}")
+            print()
+            print(f"      {body}")
+            print()
+            print(f"  {'─' * 56}")
+        print()
+
+    def search_memories(query, palace_path, wing=None, room=None, n_results=5):
+        results = [
+            {
+                "wing": "wing_team",
+                "room": "auth-migration",
+                "source_file": "team.txt",
+                "text": "alpha",
+                "similarity": 0.49,
+            },
+            {
+                "wing": "wing_code",
+                "room": "auth-migration",
+                "source_file": "code.txt",
+                "text": "beta",
+                "similarity": 0.07,
+            },
+        ]
+        filtered = [
+            result
+            for result in results
+            if (wing is None or result["wing"] == wing) and (room is None or result["room"] == room)
+        ]
+        return {"query": query, "filters": {"wing": wing, "room": room}, "results": filtered[:n_results]}
+
+    searcher.search = search
+    searcher.search_memories = search_memories
+    register("mempalace.searcher", searcher)
+
+    knowledge_graph = types.ModuleType("mempalace.knowledge_graph")
+
+    class FakeKnowledgeGraph:
+        def __init__(self):
+            self.rows = []
+
+        def add_triple(self, subject, predicate, obj, valid_from=None, source_file=None):
+            self.rows.append(
+                {
+                    "subject": subject,
+                    "predicate": predicate,
+                    "object": obj,
+                    "valid_from": valid_from,
+                    "valid_to": None,
+                    "source_file": source_file,
+                }
+            )
+
+        def invalidate(self, subject, predicate, obj, ended=None):
+            for row in self.rows:
+                if row["subject"] == subject and row["predicate"] == predicate and row["object"] == obj:
+                    row["valid_to"] = ended
+
+        def query_entity(self, entity, direction="both"):
+            return [row for row in self.rows if row["subject"] == entity or row["object"] == entity]
+
+        def timeline(self, entity):
+            return sorted(self.query_entity(entity), key=lambda row: row["valid_from"] or "")
+
+        def stats(self):
+            return {"triples": len(self.rows)}
+
+    knowledge_graph.KnowledgeGraph = FakeKnowledgeGraph
+    register("mempalace.knowledge_graph", knowledge_graph)
+
+
+def test_phase0_capture_round_trip_with_stubbed_reference(tmp_path, monkeypatch):
+    _install_phase0_capture_stubs(monkeypatch)
+    source_fixture_root = tmp_path / "source"
+    shutil.copytree(FIXTURE_ROOT / "inputs", source_fixture_root / "inputs")
+
+    output_a = tmp_path / "out-a"
+    output_b = tmp_path / "out-b"
+
+    monkeypatch.setattr(phase0_capture, "_run_help", lambda args, env: f"help:{' '.join(args)}\n")
+    monkeypatch.setattr(phase0_capture, "SOURCE_FIXTURE_ROOT", source_fixture_root)
+    monkeypatch.setattr(phase0_capture, "INPUT_ROOT", source_fixture_root / "inputs")
+
+    def configure_output(output_root: Path) -> None:
+        monkeypatch.setattr(phase0_capture, "OUTPUT_FIXTURE_ROOT", output_root)
+        monkeypatch.setattr(phase0_capture, "GOLDEN_ROOT", output_root / "goldens")
+        monkeypatch.setattr(phase0_capture, "INVENTORY_ROOT", output_root / "inventory")
+        monkeypatch.setattr(phase0_capture, "LOCK_PATH", output_root / "fixture-lock.json")
+
+    configure_output(output_a)
+    assert phase0_capture.main() == 0
+    configure_output(output_b)
+    assert phase0_capture.main() == 0
+
+    tree_a = {
+        str(path.relative_to(output_a)): path.read_bytes()
+        for path in sorted(output_a.rglob("*"))
+        if path.is_file()
+    }
+    tree_b = {
+        str(path.relative_to(output_b)): path.read_bytes()
+        for path in sorted(output_b.rglob("*"))
+        if path.is_file()
+    }
+    assert tree_a == tree_b
+
+    lock = json.loads((output_a / "fixture-lock.json").read_text(encoding="utf-8"))
+    assert lock["python"].count(".") == 1
+    assert "goldens/search-cli.txt" in lock["tolerant_generated_files"]
+    assert set(lock["generated_hashes"]) == {
+        "goldens/aaak.json",
+        "goldens/knowledge-graph.json",
+        "goldens/mcp-contract.json",
+        "goldens/palace-graph.json",
+        "inventory/cli-help.json",
+        "inventory/environment.json",
+        "inventory/mcp-tools.json",
+    }
+
+    env_inventory = json.loads((output_a / "inventory" / "environment.json").read_text(encoding="utf-8"))
+    assert env_inventory["python_version"].count(".") == 1
 
 
 def test_phase0_drift_script_reports_exact_drift_without_rewriting_workspace(tmp_path, monkeypatch):
@@ -303,7 +746,7 @@ def test_phase0_drift_script_reports_exact_drift_without_rewriting_workspace(tmp
 def test_phase0_drift_script_is_stable_when_vendor_env_exists():
     vendor = ROOT / ".phase0_vendor"
     if not vendor.exists():
-        return
+        pytest.skip(".phase0_vendor is not present")
 
     probe = subprocess.run(
         [
@@ -321,7 +764,7 @@ def test_phase0_drift_script_is_stable_when_vendor_env_exists():
         check=False,
     )
     if probe.returncode != 0:
-        return
+        pytest.skip(f".phase0_vendor does not provide importable chromadb: {probe.stderr}")
 
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join([str(vendor), str(ROOT), env.get("PYTHONPATH", "")]).strip(

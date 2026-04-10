@@ -24,6 +24,7 @@ This matrix defines which Python behaviors the Rust implementation must preserve
 |---|---|---|
 | Search ranking | Preserve useful relevance; exact ordering only where scores tie | Backend and embedding implementation will change |
 | Similarity values | Numeric values may differ within backend/model tolerance | Distance math differs across stores |
+| CLI search scores | Preserve layout and result identity, but tolerate raw `Match:` float drift | CLI prints backend-derived similarity values directly |
 | Wake-up drawer selection | Preserve top-story usefulness and deterministic formatting | Storage changes should not break user experience |
 | Chunk boundaries | Preserve semantics on fixture corpus, not byte-identical splits for all inputs | Rust chunker may have minor boundary differences |
 | Graph traversal ordering | Stable ordering preferred, but exact ordering only required for same hop/count groups | Derived graph can be normalized deterministically |

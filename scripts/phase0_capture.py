@@ -30,6 +30,7 @@ LOCK_PATH = OUTPUT_FIXTURE_ROOT / "fixture-lock.json"
 SANITIZED_HOME = "/tmp/mempalace-phase0-home"
 SANITIZED_PALACE_PATH = f"{SANITIZED_HOME}/.mempalace/palace"
 TOLERANT_OUTPUTS = {
+    "goldens/search-cli.txt",
     "goldens/search-programmatic.json",
     "goldens/wake-up-wing-code.txt",
     "goldens/wake-up.txt",
@@ -51,6 +52,10 @@ def _write_json(path: Path, payload: object) -> None:
 def _write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _python_series() -> str:
+    return f"{sys.version_info.major}.{sys.version_info.minor}"
 
 
 def _sha256(path: Path) -> str:
@@ -316,7 +321,7 @@ def main() -> int:
                 continue
 
         env_inventory = {
-            "python_version": sys.version.split()[0],
+            "python_version": _python_series(),
             "python_implementation": platform.python_implementation(),
             "dependency_inputs": _load_dependency_inputs(),
             "resolved_packages": packages,
@@ -447,7 +452,7 @@ def main() -> int:
                 "phase": "0",
                 "version": 1,
                 "generated_by": "scripts/phase0_capture.py",
-                "python": sys.version.split()[0],
+                "python": _python_series(),
                 "input_hashes": input_hashes,
                 "generated_hashes": generated_hashes,
                 "tolerant_generated_files": sorted(TOLERANT_OUTPUTS),

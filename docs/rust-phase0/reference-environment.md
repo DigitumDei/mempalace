@@ -27,7 +27,7 @@ PYTHONPATH=.phase0_vendor:. python3 scripts/check_phase0_drift.py
 
 - The capture script uses the Python reference implementation directly.
 - Search goldens rely on Chroma's default embedding path and may warm model assets on first run.
-- Drift enforcement is split by contract surface: exact-byte for CLI/MCP/graph assets, semantic comparison for tolerant search-programmatic and wake-up outputs.
+- Drift enforcement is split by contract surface: exact-byte for CLI/MCP/graph assets, semantic comparison for search outputs and wake-up outputs. `search-cli.txt` preserves layout, result identity, and meaningful ranking, but raw similarity floats are treated as tolerant.
 - `scripts/check_phase0_drift.py` captures into a temporary output root via `MEMPALACE_PHASE0_OUTPUT_ROOT` before comparing against committed fixtures, so the workspace is not rewritten during drift detection.
 - Some committed graph and search fixtures also depend on deterministic in-script seed records added during capture so the corpus exercises tunnel traversal, `connected_via`, and mixed-wing search cases consistently.
 - Regeneration should be run once with network access to warm assets, then rerun in a no-network environment when Phase 0 pinning is tightened further.
