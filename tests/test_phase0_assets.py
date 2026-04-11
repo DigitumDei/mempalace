@@ -143,6 +143,9 @@ def test_phase0_environment_inventory_is_stable_shape():
     assert "pyproject" in inventory["dependency_inputs"]
     assert "requirements_txt" in inventory["dependency_inputs"]
     assert "resolved_packages" in inventory
+    assert {"chromadb", "pytest", "pyyaml"}.issubset(
+        {name.lower() for name in inventory["resolved_packages"]}
+    )
 
 
 def test_phase0_drift_contract_sets_match_docs():
@@ -213,6 +216,34 @@ def test_phase0_programmatic_search_tolerance_keeps_order_and_similarity_gate():
         changed_text = json.loads(json.dumps(baseline))
         changed_text["unfiltered"]["results"][0]["text"] = "gamma"
         (after_root / rel_path).write_text(json.dumps(changed_text), encoding="utf-8")
+        assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+
+        duplicate_baseline = {
+            "unfiltered": {
+                "query": "auth migration parity",
+                "filters": {"wing": None, "room": None},
+                "results": [
+                    {
+                        "wing": "wing_team",
+                        "room": "auth-migration",
+                        "source_file": "team.txt",
+                        "text": "alpha",
+                        "similarity": 0.90,
+                    },
+                    {
+                        "wing": "wing_team",
+                        "room": "auth-migration",
+                        "source_file": "team.txt",
+                        "text": "alpha",
+                        "similarity": 0.80,
+                    },
+                ],
+            }
+        }
+        duplicate_drift = json.loads(json.dumps(duplicate_baseline))
+        duplicate_drift["unfiltered"]["results"][0]["similarity"] = 0.80
+        (before_root / rel_path).write_text(json.dumps(duplicate_baseline), encoding="utf-8")
+        (after_root / rel_path).write_text(json.dumps(duplicate_drift), encoding="utf-8")
         assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
 
 
@@ -370,6 +401,25 @@ def test_phase0_wake_up_tolerance_requires_structure():
 
         broken = "\n".join(baseline.splitlines()[:6]) + "\n"
         (after_root / rel_path).write_text(broken, encoding="utf-8")
+        assert not check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
+
+        ordered = "\n".join(
+            [
+                "## L0 - IDENTITY",
+                "I am the MemPalace phase 0 reference capture.",
+                "",
+                "## L1 - WAKE UP",
+                "Top drawers:",
+                "",
+                "[auth-migration]",
+                "  - alpha",
+                "  - beta",
+                "",
+            ]
+        )
+        reordered = ordered.replace("  - alpha\n  - beta", "  - beta\n  - alpha", 1)
+        (before_root / rel_path).write_text(ordered + "\n", encoding="utf-8")
+        (after_root / rel_path).write_text(reordered + "\n", encoding="utf-8")
         assert not check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
 
 
@@ -659,6 +709,36 @@ def _install_phase0_capture_stubs(monkeypatch):
 
     knowledge_graph.KnowledgeGraph = FakeKnowledgeGraph
     register("mempalace.knowledge_graph", knowledge_graph)
+
+
+def test_phase0_capture_collects_declared_dependency_versions(monkeypatch):
+    monkeypatch.setattr(
+        phase0_capture.importlib.metadata,
+        "version",
+        lambda name: {
+            "build": "1.0.0",
+            "chromadb": "1.2.3",
+            "pytest": "9.9.9",
+            "pyyaml": "6.0.0",
+            "twine": "4.0.0",
+        }[name],
+    )
+
+    dependency_inputs = {
+        "pyproject": {
+            "dependencies": ["chromadb>=0.4.0", "pyyaml>=6.0"],
+            "optional_dependencies": {"dev": ["pytest>=7.0", "build>=1.0", "twine>=4.0"]},
+        },
+        "requirements_txt": ["chromadb>=0.4.0", "pyyaml>=6.0"],
+    }
+
+    assert phase0_capture._resolved_declared_packages(dependency_inputs) == {
+        "build": "1.0.0",
+        "chromadb": "1.2.3",
+        "pytest": "9.9.9",
+        "pyyaml": "6.0.0",
+        "twine": "4.0.0",
+    }
 
 
 def test_phase0_capture_round_trip_with_stubbed_reference(tmp_path, monkeypatch):

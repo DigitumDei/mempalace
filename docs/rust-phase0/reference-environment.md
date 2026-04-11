@@ -5,11 +5,11 @@
 - Python version used for the committed Phase 0 capture: `3.11.2`
 - Python implementation: `CPython`
 - Dependency inputs recorded from: `pyproject.toml` and `requirements.txt`
-- Resolved package versions from the capture environment are snapshotted in `tests/fixtures/phase0/inventory/environment.json`.
+- Resolved versions for declared direct dependencies and dev tools present in the capture environment are snapshotted in `tests/fixtures/phase0/inventory/environment.json`.
 - Local dependency bootstrap used for the committed Phase 0 capture in this repo:
   - `pip3 install --target .phase0_vendor chromadb pyyaml pytest build twine`
 
-The bootstrap command above is a record of how the current baseline was captured, not a lockfile-backed installer. Until Phase 0 pinning is tightened further, treat `environment.json` plus the dependency inputs as the authoritative environment record.
+The bootstrap command above is a record of how the current baseline was captured, not a lockfile-backed installer. Until Phase 0 pinning is tightened further, treat `environment.json` plus the dependency inputs as the authoritative direct-dependency environment record.
 
 ## Regeneration Command
 

@@ -93,36 +93,41 @@ def _compare_ranked_results(
     if len(before_results) != len(after_results):
         return False
 
-    before_by_identity = {}
-    after_by_identity = {}
-    for result in before_results:
+    def identity_of(result: dict[str, object]) -> tuple[object, ...]:
         identity = [result["wing"], result["room"], result["source_file"]]
         if "text" in result:
             identity.append(result["text"])
         identity.extend(result.get("body", []))
-        identity = tuple(identity)
-        before_by_identity[identity] = result
-    for result in after_results:
-        identity = [result["wing"], result["room"], result["source_file"]]
-        if "text" in result:
-            identity.append(result["text"])
-        identity.extend(result.get("body", []))
-        identity = tuple(identity)
-        after_by_identity[identity] = result
+        return tuple(identity)
 
-    if set(before_by_identity) != set(after_by_identity):
+    def label_occurrences(
+        results: list[dict[str, object]],
+    ) -> tuple[list[tuple[tuple[object, ...], int]], dict[tuple[tuple[object, ...], int], dict[str, object]]]:
+        seen: dict[tuple[object, ...], int] = {}
+        labels: list[tuple[tuple[object, ...], int]] = []
+        labeled_results: dict[tuple[tuple[object, ...], int], dict[str, object]] = {}
+        for result in results:
+            identity = identity_of(result)
+            occurrence = seen.get(identity, 0)
+            seen[identity] = occurrence + 1
+            label = (identity, occurrence)
+            labels.append(label)
+            labeled_results[label] = result
+        return labels, labeled_results
+
+    before_labels, before_labeled = label_occurrences(before_results)
+    after_labels, after_labeled = label_occurrences(after_results)
+    if sorted(before_labels) != sorted(after_labels):
         return False
 
-    before_positions = {identity: index for index, identity in enumerate(before_by_identity)}
-    after_positions = {identity: index for index, identity in enumerate(after_by_identity)}
-
-    for identity in sorted(before_by_identity):
-        before_norm = before_by_identity[identity]
-        after_norm = after_by_identity[identity]
+    for label in before_labels:
+        before_norm = before_labeled[label]
+        after_norm = after_labeled[label]
         if (
             before_norm["wing"] != after_norm["wing"]
             or before_norm["room"] != after_norm["room"]
             or before_norm["source_file"] != after_norm["source_file"]
+            or before_norm.get("text") != after_norm.get("text")
             or before_norm.get("body", []) != after_norm.get("body", [])
         ):
             return False
@@ -132,18 +137,18 @@ def _compare_ranked_results(
             if abs(before_norm["similarity"] - after_norm["similarity"]) > SEARCH_SIMILARITY_TOLERANCE:
                 return False
 
-    ordered_before = list(before_by_identity)
-    for index, higher_identity in enumerate(ordered_before):
-        higher_similarity = before_by_identity[higher_identity].get("similarity")
+    after_positions = {label: index for index, label in enumerate(after_labels)}
+    for index, higher_label in enumerate(before_labels):
+        higher_similarity = before_labeled[higher_label].get("similarity")
         if higher_similarity is None:
             continue
-        for lower_identity in ordered_before[index + 1 :]:
-            lower_similarity = before_by_identity[lower_identity].get("similarity")
+        for lower_label in before_labels[index + 1 :]:
+            lower_similarity = before_labeled[lower_label].get("similarity")
             if lower_similarity is None:
                 continue
             if higher_similarity - lower_similarity <= SEARCH_SIMILARITY_TOLERANCE:
                 continue
-            if after_positions[higher_identity] > after_positions[lower_identity]:
+            if after_positions[higher_label] > after_positions[lower_label]:
                 return False
     return True
 
@@ -292,7 +297,7 @@ def _compare_wake_up(before_root: Path, after_root: Path, rel_path: str) -> bool
         after_bullets = after_rooms.get(room_name)
         if not after_bullets:
             return False
-        if set(bullets) != set(after_bullets):
+        if bullets != after_bullets:
             return False
     return True
 

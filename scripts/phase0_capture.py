@@ -10,6 +10,7 @@ import io
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -112,6 +113,32 @@ def _load_dependency_inputs() -> dict[str, object]:
         },
         "requirements_txt": requirements,
     }
+
+
+def _requirement_name(spec: str) -> str:
+    match = re.match(r"^\s*([A-Za-z0-9_.-]+)", spec)
+    if match is None:
+        raise ValueError(f"Unable to parse requirement name from {spec!r}")
+    return match.group(1)
+
+
+def _resolved_declared_packages(dependency_inputs: dict[str, object]) -> dict[str, str]:
+    pyproject = dependency_inputs["pyproject"]
+    package_names = {
+        _requirement_name(spec)
+        for spec in pyproject.get("dependencies", [])
+    }
+    for specs in pyproject.get("optional_dependencies", {}).values():
+        package_names.update(_requirement_name(spec) for spec in specs)
+    package_names.update(_requirement_name(spec) for spec in dependency_inputs.get("requirements_txt", []))
+
+    packages = {}
+    for package_name in sorted(package_names, key=str.lower):
+        try:
+            packages[package_name] = importlib.metadata.version(package_name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    return packages
 
 
 def _normalize_search_results(results: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -313,18 +340,13 @@ def main() -> int:
         }
         _write_json(INVENTORY_ROOT / "mcp-tools.json", mcp_inventory)
 
-        packages = {}
-        for pkg in ["chromadb", "PyYAML", "pytest"]:
-            try:
-                packages[pkg] = importlib.metadata.version(pkg)
-            except importlib.metadata.PackageNotFoundError:
-                continue
+        dependency_inputs = _load_dependency_inputs()
 
         env_inventory = {
             "python_version": _python_series(),
             "python_implementation": platform.python_implementation(),
-            "dependency_inputs": _load_dependency_inputs(),
-            "resolved_packages": packages,
+            "dependency_inputs": dependency_inputs,
+            "resolved_packages": _resolved_declared_packages(dependency_inputs),
         }
         _write_json(INVENTORY_ROOT / "environment.json", env_inventory)
 
