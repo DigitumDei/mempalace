@@ -100,6 +100,11 @@ def _compare_ranked_results(
         identity.extend(result.get("body", []))
         return tuple(identity)
 
+    def sort_key(label: tuple[tuple[object, ...], int]) -> tuple[tuple[str, ...], int]:
+        identity, occurrence = label
+        normalized_identity = tuple("" if value is None else str(value) for value in identity)
+        return normalized_identity, occurrence
+
     def label_occurrences(
         results: list[dict[str, object]],
     ) -> tuple[list[tuple[tuple[object, ...], int]], dict[tuple[tuple[object, ...], int], dict[str, object]]]:
@@ -117,7 +122,7 @@ def _compare_ranked_results(
 
     before_labels, before_labeled = label_occurrences(before_results)
     after_labels, after_labeled = label_occurrences(after_results)
-    if sorted(before_labels, key=lambda x: (tuple(str(v) if v is not None else "" for v in x[0]), x[1])) != sorted(after_labels, key=lambda x: (tuple(str(v) if v is not None else "" for v in x[0]), x[1])):
+    if sorted(before_labels, key=sort_key) != sorted(after_labels, key=sort_key):
         return False
 
     for label in before_labels:
@@ -283,21 +288,19 @@ def _compare_wake_up(before_root: Path, after_root: Path, rel_path: str) -> bool
     after = _parse_wake_up(_read_text(after_root, rel_path))
     if before["header"] != after["header"]:
         return False
-    before_rooms = {room["room"]: room["bullets"] for room in before["rooms"]}
-    after_rooms = {room["room"]: room["bullets"] for room in after["rooms"]}
+    before_rooms = before["rooms"]
+    after_rooms = after["rooms"]
     if not before_rooms and not after_rooms:
         return True
     if not before_rooms or not after_rooms:
         return False
-    if set(before_rooms) != set(after_rooms):
+    if len(before_rooms) != len(after_rooms):
         return False
-    for room_name, bullets in before_rooms.items():
-        if not room_name or not bullets:
+
+    for before_room, after_room in zip(before_rooms, after_rooms):
+        if before_room["room"] != after_room["room"]:
             return False
-        after_bullets = after_rooms.get(room_name)
-        if not after_bullets:
-            return False
-        if bullets != after_bullets:
+        if before_room["bullets"] != after_room["bullets"]:
             return False
     return True
 

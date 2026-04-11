@@ -246,6 +246,33 @@ def test_phase0_programmatic_search_tolerance_keeps_order_and_similarity_gate():
         (after_root / rel_path).write_text(json.dumps(duplicate_drift), encoding="utf-8")
         assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
 
+        nullable_baseline = {
+            "unfiltered": {
+                "query": "auth migration parity",
+                "filters": {"wing": None, "room": None},
+                "results": [
+                    {
+                        "wing": "wing_team",
+                        "room": None,
+                        "source_file": "team.txt",
+                        "text": "alpha",
+                        "similarity": 0.90,
+                    },
+                    {
+                        "wing": "wing_team",
+                        "room": "auth-migration",
+                        "source_file": "team.txt",
+                        "text": "beta",
+                        "similarity": 0.80,
+                    },
+                ],
+            }
+        }
+        nullable_after = json.loads(json.dumps(nullable_baseline))
+        (before_root / rel_path).write_text(json.dumps(nullable_baseline), encoding="utf-8")
+        (after_root / rel_path).write_text(json.dumps(nullable_after), encoding="utf-8")
+        assert check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+
 
 def test_phase0_search_cli_tolerance_preserves_structure_and_ranking():
     with tempfile.TemporaryDirectory() as before_str, tempfile.TemporaryDirectory() as after_str:
@@ -435,6 +462,88 @@ def test_phase0_wake_up_tolerance_allows_matching_short_outputs():
         (before_root / rel_path).write_text(short, encoding="utf-8")
         (after_root / rel_path).write_text(short, encoding="utf-8")
         assert check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
+
+
+def test_phase0_wake_up_tolerance_preserves_room_order_and_duplicates():
+    with tempfile.TemporaryDirectory() as before_str, tempfile.TemporaryDirectory() as after_str:
+        before_root = Path(before_str)
+        after_root = Path(after_str)
+        rel_path = "goldens/wake-up.txt"
+        for root in (before_root, after_root):
+            (root / "goldens").mkdir(parents=True, exist_ok=True)
+
+        baseline = "\n".join(
+            [
+                "## L0 - IDENTITY",
+                "I am the MemPalace phase 0 reference capture.",
+                "",
+                "## L1 - WAKE UP",
+                "Top drawers:",
+                "",
+                "[auth-migration]",
+                "  - alpha",
+                "",
+                "[code-focus]",
+                "  - beta",
+                "",
+                "[auth-migration]",
+                "  - gamma",
+                "",
+            ]
+        )
+        reordered = "\n".join(
+            [
+                "## L0 - IDENTITY",
+                "I am the MemPalace phase 0 reference capture.",
+                "",
+                "## L1 - WAKE UP",
+                "Top drawers:",
+                "",
+                "[code-focus]",
+                "  - beta",
+                "",
+                "[auth-migration]",
+                "  - alpha",
+                "",
+                "[auth-migration]",
+                "  - gamma",
+                "",
+            ]
+        )
+
+        (before_root / rel_path).write_text(baseline, encoding="utf-8")
+        (after_root / rel_path).write_text(reordered, encoding="utf-8")
+        assert not check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
+
+
+def test_phase0_wake_up_tolerance_allows_matching_empty_rooms():
+    with tempfile.TemporaryDirectory() as before_str, tempfile.TemporaryDirectory() as after_str:
+        before_root = Path(before_str)
+        after_root = Path(after_str)
+        rel_path = "goldens/wake-up.txt"
+        for root in (before_root, after_root):
+            (root / "goldens").mkdir(parents=True, exist_ok=True)
+
+        empty_room = "\n".join(
+            [
+                "## L0 - IDENTITY",
+                "I am the MemPalace phase 0 reference capture.",
+                "",
+                "## L1 - WAKE UP",
+                "Top drawers:",
+                "",
+                "[auth-migration]",
+                "",
+            ]
+        )
+        non_empty_room = empty_room.replace("[auth-migration]\n", "[auth-migration]\n  - alpha\n", 1)
+
+        (before_root / rel_path).write_text(empty_room, encoding="utf-8")
+        (after_root / rel_path).write_text(empty_room, encoding="utf-8")
+        assert check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
+
+        (after_root / rel_path).write_text(non_empty_room, encoding="utf-8")
+        assert not check_phase0_drift._compare_wake_up(before_root, after_root, rel_path)
 
 
 def test_phase0_drift_script_ignores_inputs_and_leaves_workspace_unchanged(tmp_path, monkeypatch):
