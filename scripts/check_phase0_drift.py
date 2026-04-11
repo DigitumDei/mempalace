@@ -117,7 +117,7 @@ def _compare_ranked_results(
 
     before_labels, before_labeled = label_occurrences(before_results)
     after_labels, after_labeled = label_occurrences(after_results)
-    if sorted(before_labels) != sorted(after_labels):
+    if sorted(before_labels, key=lambda x: (tuple(str(v) if v is not None else "" for v in x[0]), x[1])) != sorted(after_labels, key=lambda x: (tuple(str(v) if v is not None else "" for v in x[0]), x[1])):
         return False
 
     for label in before_labels:
