@@ -136,6 +136,7 @@ dependencies = [
  "mempalace-config",
  "mempalace-core",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -160,7 +161,6 @@ dependencies = [
  "thiserror",
  "time",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

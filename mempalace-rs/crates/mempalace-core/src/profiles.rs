@@ -5,10 +5,11 @@ use serde::{Deserialize, Serialize};
 use crate::{MempalaceError, Result};
 
 /// Pinned embedding profile names used throughout the Rust workspace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingProfile {
     /// Default profile aligned with Python-era retrieval expectations.
+    #[default]
     Balanced,
     /// Lower-cost profile for constrained machines.
     LowCpu,
@@ -27,12 +28,6 @@ impl EmbeddingProfile {
             Self::Balanced => &BALANCED_PROFILE,
             Self::LowCpu => &LOW_CPU_PROFILE,
         }
-    }
-}
-
-impl Default for EmbeddingProfile {
-    fn default() -> Self {
-        Self::Balanced
     }
 }
 
@@ -69,6 +64,7 @@ pub const LOW_CPU_PROFILE: EmbeddingProfileMetadata = EmbeddingProfileMetadata {
 };
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{BALANCED_PROFILE, EmbeddingProfile, LOW_CPU_PROFILE};
 

@@ -82,6 +82,7 @@ define_id!(RoomId, "room");
 define_id!(DrawerId, "drawer");
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{DrawerId, RoomId, WingId};
 

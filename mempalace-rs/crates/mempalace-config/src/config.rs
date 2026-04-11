@@ -9,6 +9,7 @@ pub const DEFAULT_BASE_DIR: &str = "~/.mempalace";
 pub const DEFAULT_COLLECTION_NAME: &str = "mempalace_drawers";
 const CONFIG_FILE_NAME: &str = "config.json";
 const PROJECT_CONFIG_FILE_NAME: &str = "mempalace.yaml";
+const LEGACY_PROJECT_CONFIG_FILE_NAME: &str = "mempal.yaml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedPaths {
@@ -20,6 +21,7 @@ pub struct ResolvedPaths {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigFileV1 {
+    #[serde(default = "default_version")]
     pub version: u32,
     #[serde(default)]
     pub palace_path: Option<String>,
@@ -51,6 +53,17 @@ pub struct MempalaceConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub wing: String,
+    #[serde(default)]
+    pub rooms: Vec<ProjectRoomConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectRoomConfig {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
 }
 
 pub struct ConfigLoader;
@@ -59,6 +72,7 @@ impl ConfigLoader {
     pub fn load_with_env(base_dir_override: Option<&Path>) -> Result<MempalaceConfig> {
         Self::load_from_sources(
             base_dir_override,
+            // `MEMPAL_PALACE_PATH` is the legacy Python alias; keep it for upgrade compatibility.
             env::var("MEMPALACE_PALACE_PATH").ok().or_else(|| env::var("MEMPAL_PALACE_PATH").ok()),
             env::var("MEMPALACE_EMBEDDING_PROFILE").ok(),
         )
@@ -90,6 +104,10 @@ impl ConfigLoader {
             path: paths.base_dir.clone(),
             source,
         })?;
+        fs::create_dir_all(&paths.palace_dir).map_err(|source| MempalaceError::ConfigWrite {
+            path: paths.palace_dir.clone(),
+            source,
+        })?;
 
         if !paths.config_file.exists() {
             let default_file = ConfigFileV1 {
@@ -112,7 +130,7 @@ impl ConfigLoader {
     }
 
     pub fn load_project_config(path: &Path) -> Result<ProjectConfig> {
-        let config_path = path.join(PROJECT_CONFIG_FILE_NAME);
+        let config_path = resolve_project_config_path(path);
         let body = fs::read_to_string(&config_path)
             .map_err(|source| MempalaceError::ConfigRead { path: config_path.clone(), source })?;
         serde_yaml::from_str(&body).map_err(|err| MempalaceError::ConfigParse {
@@ -138,7 +156,7 @@ fn resolve_paths(base_dir_override: Option<&Path>) -> Result<ResolvedPaths> {
 
 fn read_config_file(path: &Path) -> Result<ConfigFileV1> {
     if !path.exists() {
-        return Ok(ConfigFileV1::default());
+        return Ok(ConfigFileV1 { palace_path: None, ..ConfigFileV1::default() });
     }
 
     let body = fs::read_to_string(path)
@@ -170,8 +188,21 @@ fn default_collection_name() -> String {
     DEFAULT_COLLECTION_NAME.to_owned()
 }
 
+fn default_version() -> u32 {
+    1
+}
+
 fn default_palace_path() -> String {
     format!("{DEFAULT_BASE_DIR}/palace")
+}
+
+fn resolve_project_config_path(base: &Path) -> PathBuf {
+    let primary = base.join(PROJECT_CONFIG_FILE_NAME);
+    if primary.exists() {
+        return primary;
+    }
+
+    base.join(LEGACY_PROJECT_CONFIG_FILE_NAME)
 }
 
 fn expand_path(value: &str) -> Result<PathBuf> {
@@ -188,6 +219,7 @@ fn expand_path(value: &str) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::fs;
     use std::path::PathBuf;
@@ -213,6 +245,7 @@ mod tests {
         assert_eq!(config.collection_name, DEFAULT_COLLECTION_NAME);
         assert_eq!(config.embedding_profile, EmbeddingProfile::Balanced);
         assert_eq!(config.palace_path, base.join("palace"));
+        assert!(paths.palace_dir.is_dir());
 
         fs::remove_dir_all(base).unwrap();
     }
@@ -239,10 +272,95 @@ mod tests {
     fn project_config_parses_yaml() {
         let base = temp_dir();
         fs::create_dir_all(&base).unwrap();
-        fs::write(base.join("mempalace.yaml"), "wing: project_alpha\n").unwrap();
+        fs::write(
+            base.join("mempalace.yaml"),
+            "wing: project_alpha\nrooms:\n  - name: backend\n    description: Backend code\n    keywords:\n      - auth\n",
+        )
+        .unwrap();
 
         let config = ConfigLoader::load_project_config(&base).unwrap();
         assert_eq!(config.wing, "project_alpha");
+        assert_eq!(config.rooms.len(), 1);
+        assert_eq!(config.rooms[0].name, "backend");
+        assert_eq!(config.rooms[0].description.as_deref(), Some("Backend code"));
+        assert_eq!(config.rooms[0].keywords, vec!["auth"]);
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn load_uses_base_dir_override_without_config_file() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+
+        let config = ConfigLoader::load_with_env(Some(&base)).unwrap();
+
+        assert_eq!(config.palace_path, base.join("palace"));
+        assert_eq!(config.collection_name, DEFAULT_COLLECTION_NAME);
+        assert_eq!(config.embedding_profile, EmbeddingProfile::Balanced);
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn legacy_config_without_version_or_profile_still_loads() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("config.json"), r#"{"collection_name":"legacy_drawers"}"#).unwrap();
+
+        let config = ConfigLoader::load_with_env(Some(&base)).unwrap();
+
+        assert_eq!(config.schema_version, 1);
+        assert_eq!(config.collection_name, "legacy_drawers");
+        assert_eq!(config.embedding_profile, EmbeddingProfile::Balanced);
+        assert_eq!(config.palace_path, base.join("palace"));
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn legacy_project_config_filename_is_supported() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("mempal.yaml"), "wing: legacy\nrooms: []\n").unwrap();
+
+        let config = ConfigLoader::load_project_config(&base).unwrap();
+        assert_eq!(config.wing, "legacy");
+        assert!(config.rooms.is_empty());
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn legacy_palace_env_alias_is_supported() {
+        let base = temp_dir();
+        ConfigLoader::init_default(Some(&base)).unwrap();
+
+        let config = ConfigLoader::load_from_sources(
+            Some(&base),
+            Some("/tmp/legacy-palace".to_owned()),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(config.palace_path, PathBuf::from("/tmp/legacy-palace"));
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn invalid_embedding_profile_is_rejected() {
+        let base = temp_dir();
+        ConfigLoader::init_default(Some(&base)).unwrap();
+
+        let err = ConfigLoader::load_from_sources(
+            Some(&base),
+            None,
+            Some("definitely_not_real".to_owned()),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("embedding profile"), "unexpected error: {err}");
 
         fs::remove_dir_all(base).unwrap();
     }
