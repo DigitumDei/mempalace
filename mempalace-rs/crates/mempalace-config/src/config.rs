@@ -111,7 +111,7 @@ impl ConfigLoader {
 
         if !paths.config_file.exists() {
             let default_file = ConfigFileV1 {
-                palace_path: Some(paths.palace_dir.display().to_string()),
+                palace_path: base_dir_override.map(|_| paths.palace_dir.display().to_string()),
                 ..ConfigFileV1::default()
             };
             let body = serde_json::to_string_pretty(&default_file).map_err(|err| {
