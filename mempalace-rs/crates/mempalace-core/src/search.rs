@@ -15,7 +15,7 @@ pub struct DrawerRecord {
     #[serde(with = "date_only::option", default)]
     pub date: Option<Date>,
     pub source_file: String,
-    pub chunk_index: i32,
+    pub chunk_index: u32,
     pub ingest_mode: String,
     pub extract_mode: Option<String>,
     pub added_by: String,
