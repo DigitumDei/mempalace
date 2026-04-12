@@ -206,7 +206,7 @@ fn resolve_project_config_path(base: &Path) -> PathBuf {
 }
 
 fn expand_path(value: &str) -> Result<PathBuf> {
-    if let Some(stripped) = value.strip_prefix("~/") {
+    if let Some(stripped) = value.strip_prefix("~/").or_else(|| value.strip_prefix("~\\")) {
         let home = dirs::home_dir().ok_or(MempalaceError::MissingHomeDirectory)?;
         return Ok(home.join(stripped));
     }
