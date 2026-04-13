@@ -22,6 +22,7 @@ use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile};
 
 const DRAWERS_TABLE: &str = "drawers";
 const DISTANCE_COLUMN: &str = "_distance";
+const MIN_VECTOR_INDEX_ROWS: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct LanceDrawerStore {
@@ -117,7 +118,9 @@ impl LanceDrawerStore {
             table.create_index(&["source_file"], Index::Auto).execute().await?;
         }
 
-        if !indexed_columns.contains("embedding") && table.count_rows(None).await? > 0 {
+        if !indexed_columns.contains("embedding")
+            && table.count_rows(None).await? >= MIN_VECTOR_INDEX_ROWS
+        {
             table.create_index(&["embedding"], Index::Auto).execute().await?;
         }
 
