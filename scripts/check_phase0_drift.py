@@ -107,7 +107,10 @@ def _compare_ranked_results(
 
     def label_occurrences(
         results: list[dict[str, object]],
-    ) -> tuple[list[tuple[tuple[object, ...], int]], dict[tuple[tuple[object, ...], int], dict[str, object]]]:
+    ) -> tuple[
+        list[tuple[tuple[object, ...], int]],
+        dict[tuple[tuple[object, ...], int], dict[str, object]],
+    ]:
         seen: dict[tuple[object, ...], int] = {}
         labels: list[tuple[tuple[object, ...], int]] = []
         labeled_results: dict[tuple[tuple[object, ...], int], dict[str, object]] = {}
@@ -139,7 +142,10 @@ def _compare_ranked_results(
         if "similarity" in before_norm or "similarity" in after_norm:
             if "similarity" not in before_norm or "similarity" not in after_norm:
                 return False
-            if abs(before_norm["similarity"] - after_norm["similarity"]) > SEARCH_SIMILARITY_TOLERANCE:
+            if (
+                abs(before_norm["similarity"] - after_norm["similarity"])
+                > SEARCH_SIMILARITY_TOLERANCE
+            ):
                 return False
 
     after_positions = {label: index for index, label in enumerate(after_labels)}
