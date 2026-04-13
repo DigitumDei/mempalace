@@ -61,7 +61,9 @@ def test_phase0_docs_exist():
 
 def test_phase0_expected_assets_exist():
     assert {path.name for path in GOLDEN_ROOT.iterdir() if path.is_file()} == EXPECTED_GOLDENS
-    assert {path.name for path in INVENTORY_ROOT.iterdir() if path.is_file()} == EXPECTED_INVENTORIES
+    assert {
+        path.name for path in INVENTORY_ROOT.iterdir() if path.is_file()
+    } == EXPECTED_INVENTORIES
     for rel in EXPECTED_INPUTS:
         assert (FIXTURE_ROOT / rel).exists()
 
@@ -84,8 +86,7 @@ def test_phase0_fixture_lock_matches_files():
         str(path.relative_to(FIXTURE_ROOT)): _sha256(path)
         for root in (GOLDEN_ROOT, INVENTORY_ROOT)
         for path in sorted(root.rglob("*"))
-        if path.is_file()
-        and str(path.relative_to(FIXTURE_ROOT)) not in EXPECTED_TOLERANT_FILES
+        if path.is_file() and str(path.relative_to(FIXTURE_ROOT)) not in EXPECTED_TOLERANT_FILES
     }
     assert lock["generated_hashes"] == actual_generated_hashes
 
@@ -93,7 +94,10 @@ def test_phase0_fixture_lock_matches_files():
 def test_phase0_json_goldens_have_expected_structure():
     search = json.loads((GOLDEN_ROOT / "search-programmatic.json").read_text(encoding="utf-8"))
     assert set(search) == {"room_filtered", "unfiltered", "wing_and_room_filtered", "wing_filtered"}
-    assert search["wing_and_room_filtered"]["filters"] == {"room": "auth-migration", "wing": "wing_team"}
+    assert search["wing_and_room_filtered"]["filters"] == {
+        "room": "auth-migration",
+        "wing": "wing_team",
+    }
     assert len(search["wing_and_room_filtered"]["results"]) == 1
     assert search["wing_and_room_filtered"]["results"][0]["wing"] == "wing_team"
     assert search["wing_and_room_filtered"]["results"][0]["room"] == "auth-migration"
@@ -109,7 +113,10 @@ def test_phase0_json_goldens_have_expected_structure():
     )
 
     mcp_contract = json.loads((GOLDEN_ROOT / "mcp-contract.json").read_text(encoding="utf-8"))
-    assert mcp_contract["status_payload"]["palace_path"] == "/tmp/mempalace-phase0-home/.mempalace/palace"
+    assert (
+        mcp_contract["status_payload"]["palace_path"]
+        == "/tmp/mempalace-phase0-home/.mempalace/palace"
+    )
     mcp_search_payload = json.loads(mcp_contract["search"]["result"]["content"][0]["text"])
     assert set(mcp_search_payload) == {"filters", "query", "results"}
     assert all("similarity" not in item for item in mcp_search_payload["results"])
@@ -195,14 +202,18 @@ def test_phase0_programmatic_search_tolerance_keeps_order_and_similarity_gate():
         reordered = json.loads(json.dumps(baseline))
         reordered["unfiltered"]["results"] = list(reversed(reordered["unfiltered"]["results"]))
         (after_root / rel_path).write_text(json.dumps(reordered), encoding="utf-8")
-        assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+        assert not check_phase0_drift._compare_programmatic_search(
+            before_root, after_root, rel_path
+        )
 
         tied = json.loads(json.dumps(baseline))
         tied["unfiltered"]["results"][0]["similarity"] = 0.10
         tied["unfiltered"]["results"][1]["similarity"] = 0.08
         (before_root / rel_path).write_text(json.dumps(tied), encoding="utf-8")
         reordered_tied = json.loads(json.dumps(tied))
-        reordered_tied["unfiltered"]["results"] = list(reversed(reordered_tied["unfiltered"]["results"]))
+        reordered_tied["unfiltered"]["results"] = list(
+            reversed(reordered_tied["unfiltered"]["results"])
+        )
         (after_root / rel_path).write_text(json.dumps(reordered_tied), encoding="utf-8")
         assert check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
 
@@ -211,12 +222,16 @@ def test_phase0_programmatic_search_tolerance_keeps_order_and_similarity_gate():
         widened = json.loads(json.dumps(baseline))
         widened["unfiltered"]["results"][0]["similarity"] = 0.30
         (after_root / rel_path).write_text(json.dumps(widened), encoding="utf-8")
-        assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+        assert not check_phase0_drift._compare_programmatic_search(
+            before_root, after_root, rel_path
+        )
 
         changed_text = json.loads(json.dumps(baseline))
         changed_text["unfiltered"]["results"][0]["text"] = "gamma"
         (after_root / rel_path).write_text(json.dumps(changed_text), encoding="utf-8")
-        assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+        assert not check_phase0_drift._compare_programmatic_search(
+            before_root, after_root, rel_path
+        )
 
         duplicate_baseline = {
             "unfiltered": {
@@ -244,7 +259,9 @@ def test_phase0_programmatic_search_tolerance_keeps_order_and_similarity_gate():
         duplicate_drift["unfiltered"]["results"][0]["similarity"] = 0.80
         (before_root / rel_path).write_text(json.dumps(duplicate_baseline), encoding="utf-8")
         (after_root / rel_path).write_text(json.dumps(duplicate_drift), encoding="utf-8")
-        assert not check_phase0_drift._compare_programmatic_search(before_root, after_root, rel_path)
+        assert not check_phase0_drift._compare_programmatic_search(
+            before_root, after_root, rel_path
+        )
 
         nullable_baseline = {
             "unfiltered": {
@@ -536,7 +553,9 @@ def test_phase0_wake_up_tolerance_allows_matching_empty_rooms():
                 "",
             ]
         )
-        non_empty_room = empty_room.replace("[auth-migration]\n", "[auth-migration]\n  - alpha\n", 1)
+        non_empty_room = empty_room.replace(
+            "[auth-migration]\n", "[auth-migration]\n  - alpha\n", 1
+        )
 
         (before_root / rel_path).write_text(empty_room, encoding="utf-8")
         (after_root / rel_path).write_text(empty_room, encoding="utf-8")
@@ -640,7 +659,11 @@ def _install_phase0_capture_stubs(monkeypatch):
     def handle_request(payload):
         method = payload["method"]
         if method == "initialize":
-            return {"jsonrpc": "2.0", "id": payload["id"], "result": {"serverInfo": {"name": "phase0"}}}
+            return {
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {"serverInfo": {"name": "phase0"}},
+            }
         if method == "tools/list":
             return {
                 "jsonrpc": "2.0",
@@ -715,7 +738,13 @@ def _install_phase0_capture_stubs(monkeypatch):
 
     palace_graph = types.ModuleType("mempalace.palace_graph")
     palace_graph.traverse = lambda *args, **kwargs: [
-        {"room": "auth-migration", "hop": 0, "wings": ["wing_team"], "halls": ["hall_facts"], "count": 2},
+        {
+            "room": "auth-migration",
+            "hop": 0,
+            "wings": ["wing_team"],
+            "halls": ["hall_facts"],
+            "count": 2,
+        },
         {
             "room": "phase0-rollout",
             "hop": 1,
@@ -726,7 +755,9 @@ def _install_phase0_capture_stubs(monkeypatch):
             "recent": "2026-04-04",
         },
     ]
-    palace_graph.find_tunnels = lambda *args, **kwargs: [{"source": "auth-migration", "target": "phase0-rollout"}]
+    palace_graph.find_tunnels = lambda *args, **kwargs: [
+        {"source": "auth-migration", "target": "phase0-rollout"}
+    ]
     palace_graph.graph_stats = lambda *args, **kwargs: {"rooms": 2, "tunnels": 1}
     register("mempalace.palace_graph", palace_graph)
 
@@ -778,7 +809,11 @@ def _install_phase0_capture_stubs(monkeypatch):
             for result in results
             if (wing is None or result["wing"] == wing) and (room is None or result["room"] == room)
         ]
-        return {"query": query, "filters": {"wing": wing, "room": room}, "results": filtered[:n_results]}
+        return {
+            "query": query,
+            "filters": {"wing": wing, "room": room},
+            "results": filtered[:n_results],
+        }
 
     searcher.search = search
     searcher.search_memories = search_memories
@@ -804,7 +839,11 @@ def _install_phase0_capture_stubs(monkeypatch):
 
         def invalidate(self, subject, predicate, obj, ended=None):
             for row in self.rows:
-                if row["subject"] == subject and row["predicate"] == predicate and row["object"] == obj:
+                if (
+                    row["subject"] == subject
+                    and row["predicate"] == predicate
+                    and row["object"] == obj
+                ):
                     row["valid_to"] = ended
 
         def query_entity(self, entity, direction="both"):
@@ -898,7 +937,9 @@ def test_phase0_capture_round_trip_with_stubbed_reference(tmp_path, monkeypatch)
         "inventory/mcp-tools.json",
     }
 
-    env_inventory = json.loads((output_a / "inventory" / "environment.json").read_text(encoding="utf-8"))
+    env_inventory = json.loads(
+        (output_a / "inventory" / "environment.json").read_text(encoding="utf-8")
+    )
     assert env_inventory["python_version"].count(".") == 1
 
 
@@ -918,7 +959,9 @@ def test_phase0_drift_script_reports_exact_drift_without_rewriting_workspace(tmp
         shutil.copytree(temp_fixture_root / "inventory", output_root / "inventory")
         shutil.copy2(temp_fixture_root / "fixture-lock.json", output_root / "fixture-lock.json")
         search_cli = output_root / "goldens" / "search-cli.txt"
-        search_cli.write_text(search_cli.read_text(encoding="utf-8") + "\nDRIFT\n", encoding="utf-8")
+        search_cli.write_text(
+            search_cli.read_text(encoding="utf-8") + "\nDRIFT\n", encoding="utf-8"
+        )
         return subprocess.CompletedProcess(args=args, returncode=0)
 
     monkeypatch.setattr(check_phase0_drift.subprocess, "run", fake_run)
@@ -941,11 +984,7 @@ def test_phase0_drift_script_is_stable_when_vendor_env_exists():
         [
             sys.executable,
             "-c",
-            (
-                "import sys; "
-                f"sys.path.insert(0, {str(vendor)!r}); "
-                "import chromadb"
-            ),
+            (f"import sys; sys.path.insert(0, {str(vendor)!r}); import chromadb"),
         ],
         cwd=ROOT,
         capture_output=True,

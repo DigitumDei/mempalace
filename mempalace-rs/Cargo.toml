@@ -37,3 +37,13 @@ unsafe_code = "forbid"
 [workspace.lints.rustdoc]
 bare_urls = "deny"
 broken_intra_doc_links = "deny"
+
+[profile.dev]
+debug = 0
+incremental = false
+strip = "debuginfo"
+
+[profile.test]
+debug = 0
+incremental = false
+strip = "debuginfo"

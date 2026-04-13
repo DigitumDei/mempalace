@@ -1,0 +1,50 @@
+name: mempalace-rs-storage
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mempalace-rs-storage.yml"
+      - "mempalace-rs/**"
+  push:
+    paths:
+      - ".github/workflows/mempalace-rs-storage.yml"
+      - "mempalace-rs/**"
+  workflow_dispatch:
+
+concurrency:
+  group: mempalace-rs-storage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  storage-tests:
+    name: Storage Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mempalace-rs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mempalace-rs -> target
+
+      - name: Build mempalace-storage tests
+        run: cargo test -p mempalace-storage --locked --no-run
+
+      - name: Run mempalace-storage tests
+        run: cargo test -p mempalace-storage --locked -- --nocapture

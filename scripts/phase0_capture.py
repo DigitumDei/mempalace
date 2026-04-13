@@ -15,8 +15,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
+    import tomli as tomllib
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -47,12 +51,14 @@ def _bootstrap_paths() -> None:
 
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def _write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8", newline="\n")
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
 
 
 def _python_series() -> str:
@@ -86,10 +92,12 @@ def _sanitize_payload(payload: object, tmp_home: Path, tmp_palace: Path) -> obje
             for key, value in payload.items()
         }
     if isinstance(payload, list):
-        return [_sanitize_payload(value, tmp_home=tmp_home, tmp_palace=tmp_palace) for value in payload]
+        return [
+            _sanitize_payload(value, tmp_home=tmp_home, tmp_palace=tmp_palace) for value in payload
+        ]
     if isinstance(payload, str):
-        return (
-            payload.replace(str(tmp_palace), SANITIZED_PALACE_PATH).replace(str(tmp_home), SANITIZED_HOME)
+        return payload.replace(str(tmp_palace), SANITIZED_PALACE_PATH).replace(
+            str(tmp_home), SANITIZED_HOME
         )
     return payload
 
@@ -124,13 +132,12 @@ def _requirement_name(spec: str) -> str:
 
 def _resolved_declared_packages(dependency_inputs: dict[str, object]) -> dict[str, str]:
     pyproject = dependency_inputs["pyproject"]
-    package_names = {
-        _requirement_name(spec)
-        for spec in pyproject.get("dependencies", [])
-    }
+    package_names = {_requirement_name(spec) for spec in pyproject.get("dependencies", [])}
     for specs in pyproject.get("optional_dependencies", {}).values():
         package_names.update(_requirement_name(spec) for spec in specs)
-    package_names.update(_requirement_name(spec) for spec in dependency_inputs.get("requirements_txt", []))
+    package_names.update(
+        _requirement_name(spec) for spec in dependency_inputs.get("requirements_txt", [])
+    )
 
     packages = {}
     for package_name in sorted(package_names, key=str.lower):
@@ -300,7 +307,11 @@ def main() -> int:
 
         kg = KnowledgeGraph()
         kg.add_triple(
-            "MemPalace", "depends_on", "Fixture Corpus", valid_from="2026-04-01", source_file="phase0"
+            "MemPalace",
+            "depends_on",
+            "Fixture Corpus",
+            valid_from="2026-04-01",
+            source_file="phase0",
         )
         kg.add_triple(
             "Rust Rewrite", "preserves", "CLI Parity", valid_from="2026-04-02", source_file="phase0"
@@ -382,7 +393,9 @@ def main() -> int:
             "We decided to preserve CLI parity and MCP tool names because fixture drift would "
             "make the Rust rewrite impossible to evaluate."
         )
-        aaak_rendered = dialect.compress(aaak_source, metadata={"wing": "wing_code", "room": "planning"})
+        aaak_rendered = dialect.compress(
+            aaak_source, metadata={"wing": "wing_code", "room": "planning"}
+        )
         _write_json(
             GOLDEN_ROOT / "aaak.json",
             {
