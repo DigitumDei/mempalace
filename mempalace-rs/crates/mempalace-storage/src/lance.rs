@@ -99,6 +99,30 @@ impl LanceDrawerStore {
             .map(|record| record.id.as_str().to_owned())
             .collect())
     }
+
+    async fn ensure_indices(&self, table: &lancedb::Table) -> Result<()> {
+        let existing = table.list_indices().await?;
+        let indexed_columns = existing
+            .into_iter()
+            .filter_map(|config| (config.columns.len() == 1).then(|| config.columns[0].clone()))
+            .collect::<HashSet<_>>();
+
+        if !indexed_columns.contains("wing") {
+            table.create_index(&["wing"], Index::Auto).execute().await?;
+        }
+        if !indexed_columns.contains("room") {
+            table.create_index(&["room"], Index::Auto).execute().await?;
+        }
+        if !indexed_columns.contains("source_file") {
+            table.create_index(&["source_file"], Index::Auto).execute().await?;
+        }
+
+        if !indexed_columns.contains("embedding") && table.count_rows(None).await? > 0 {
+            table.create_index(&["embedding"], Index::Auto).execute().await?;
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -111,11 +135,7 @@ impl DrawerStore for LanceDrawerStore {
             .mode(CreateTableMode::exist_ok(|request| request))
             .execute()
             .await?;
-
-        table.create_index(&["embedding"], Index::Auto).execute().await?;
-        table.create_index(&["wing"], Index::Auto).execute().await?;
-        table.create_index(&["room"], Index::Auto).execute().await?;
-        table.create_index(&["source_file"], Index::Auto).execute().await?;
+        self.ensure_indices(&table).await?;
         Ok(())
     }
 
@@ -175,6 +195,7 @@ impl DrawerStore for LanceDrawerStore {
 
         let table = self.table().await?;
         table.add(drawers_to_reader(self.schema(), drawers)?).execute().await?;
+        self.ensure_indices(&table).await?;
         Ok(())
     }
 
