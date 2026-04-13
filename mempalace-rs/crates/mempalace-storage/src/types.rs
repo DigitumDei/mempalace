@@ -94,7 +94,7 @@ pub struct RetryableRun {
     pub chunk_ids: Vec<DrawerId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IngestCommitRequest {
     pub ingest_kind: String,
     pub source_key: String,

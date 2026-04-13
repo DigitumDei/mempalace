@@ -291,8 +291,20 @@ impl IngestManifestStore for SqliteOperationalStore {
                         ingest_kind: row.get(1)?,
                         source_key: row.get(2)?,
                         status: parse_status(row.get::<_, String>(3)?)?,
-                        created_at: decode_time(row.get(4)?)?,
-                        updated_at: decode_time(row.get(5)?)?,
+                        created_at: decode_time(row.get(4)?).map_err(|err| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                4,
+                                rusqlite::types::Type::Text,
+                                Box::new(err),
+                            )
+                        })?,
+                        updated_at: decode_time(row.get(5)?).map_err(|err| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                5,
+                                rusqlite::types::Type::Text,
+                                Box::new(err),
+                            )
+                        })?,
                         failed_reason: row.get(6)?,
                     })
                 },

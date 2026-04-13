@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arrow_array::{
-    ArrayRef, Date32Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator,
-    StringArray, TimestampMicrosecondArray, UInt32Array, cast::AsArray, types::Float32Type,
+    Array, ArrayRef, Date32Array, FixedSizeListArray, Float32Array, RecordBatch,
+    RecordBatchIterator, StringArray, TimestampMicrosecondArray, UInt32Array, cast::AsArray,
+    types::Float32Type,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use async_trait::async_trait;
@@ -428,9 +429,10 @@ fn records_from_batches(batches: &[RecordBatch]) -> Result<Vec<DrawerRecord>> {
                     i128::from(filed_at.value(row)) * 1_000,
                 )
                 .map_err(|err| StorageError::Invariant(err.to_string()))?,
-                importance: importance.value_as_option(row),
-                emotional_weight: emotional_weight.value_as_option(row),
-                weight: weight.value_as_option(row),
+                importance: (!importance.is_null(row)).then(|| importance.value(row)),
+                emotional_weight: (!emotional_weight.is_null(row))
+                    .then(|| emotional_weight.value(row)),
+                weight: (!weight.is_null(row)).then(|| weight.value(row)),
                 content: content.value(row).to_owned(),
                 content_hash: content_hash.value(row).to_owned(),
                 embedding: vector.into_iter().flatten().collect(),
@@ -447,7 +449,7 @@ fn matches_from_batches(batches: &[RecordBatch]) -> Result<Vec<DrawerMatch>> {
         if let Some(distance_column) = batch.column_by_name(DISTANCE_COLUMN) {
             let distance = distance_column.as_primitive::<arrow_array::types::Float32Type>();
             for row in 0..batch.num_rows() {
-                distances.push(distance.value_as_option(row));
+                distances.push((!distance.is_null(row)).then(|| distance.value(row)));
             }
         } else {
             distances.extend(std::iter::repeat_n(None, batch.num_rows()));
