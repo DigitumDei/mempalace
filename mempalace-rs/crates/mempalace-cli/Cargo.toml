@@ -6,8 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+dirs.workspace = true
 mempalace-config = { path = "../mempalace-config" }
 mempalace-core = { path = "../mempalace-core" }
+mempalace-embeddings = { path = "../mempalace-embeddings" }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

@@ -1,8 +1,12 @@
 #![allow(missing_docs)]
 
 use std::env;
+use std::path::PathBuf;
 
 use mempalace_config::ConfigLoader;
+use mempalace_embeddings::{
+    EmbeddingProvider, FastembedProvider, FastembedProviderConfig, log_startup_validation,
+};
 use tracing_subscriber::{EnvFilter, fmt};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,6 +21,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Init => {
             let paths = ConfigLoader::init_default(None)?;
             let config = ConfigLoader::load_with_env(None)?;
+            let cache_root = default_embedding_cache_dir();
+            let provider = FastembedProvider::new(
+                config.embedding_profile,
+                FastembedProviderConfig::new(cache_root),
+            );
+            let validation = provider.startup_validation()?;
+            log_startup_validation(&validation);
 
             tracing::info!(
                 config_file = %paths.config_file.display(),
@@ -69,6 +80,13 @@ fn usage() -> &'static str {
         "  mempalace-cli [--help | -h]\n",
         "  mempalace-cli [--version | -V]\n"
     )
+}
+
+fn default_embedding_cache_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from(".cache"))
+        .join("mempalace")
+        .join("embeddings")
 }
 
 #[cfg(test)]
