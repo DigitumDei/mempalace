@@ -95,7 +95,7 @@ impl LanceDrawerStore {
             .list_drawers(&filter)
             .await?
             .into_iter()
-            .map(|record| record.id.as_ref().to_owned())
+            .map(|record| record.id.as_str().to_owned())
             .collect())
     }
 }
@@ -131,7 +131,7 @@ impl DrawerStore for LanceDrawerStore {
         for drawer in drawers {
             if drawer.embedding.len() != expected_dimensions {
                 return Err(StorageError::InvalidEmbeddingDimensions {
-                    drawer_id: drawer.id.as_ref().to_owned(),
+                    drawer_id: drawer.id.as_str().to_owned(),
                     expected: expected_dimensions,
                     actual: drawer.embedding.len(),
                 });
@@ -149,7 +149,7 @@ impl DrawerStore for LanceDrawerStore {
             DuplicateStrategy::Ignore => {
                 let filtered = drawers
                     .iter()
-                    .filter(|drawer| !existing.contains(drawer.id.as_ref()))
+                    .filter(|drawer| !existing.contains(drawer.id.as_str()))
                     .cloned()
                     .collect::<Vec<_>>();
                 if filtered.is_empty() {
@@ -241,13 +241,13 @@ fn drawers_to_reader(
         schema.clone(),
         vec![
             Arc::new(StringArray::from(
-                drawers.iter().map(|drawer| Some(drawer.id.as_ref())).collect::<Vec<_>>(),
+                drawers.iter().map(|drawer| Some(drawer.id.as_str())).collect::<Vec<_>>(),
             )),
             Arc::new(StringArray::from(
-                drawers.iter().map(|drawer| Some(drawer.wing.as_ref())).collect::<Vec<_>>(),
+                drawers.iter().map(|drawer| Some(drawer.wing.as_str())).collect::<Vec<_>>(),
             )),
             Arc::new(StringArray::from(
-                drawers.iter().map(|drawer| Some(drawer.room.as_ref())).collect::<Vec<_>>(),
+                drawers.iter().map(|drawer| Some(drawer.room.as_str())).collect::<Vec<_>>(),
             )),
             Arc::new(StringArray::from(
                 drawers.iter().map(|drawer| drawer.hall.as_deref()).collect::<Vec<_>>(),
@@ -274,7 +274,7 @@ fn drawers_to_reader(
                 TimestampMicrosecondArray::from(
                     drawers
                         .iter()
-                        .map(|drawer| drawer.filed_at.unix_timestamp_nanos() / 1_000)
+                        .map(|drawer| (drawer.filed_at.unix_timestamp_nanos() / 1_000) as i64)
                         .collect::<Vec<_>>(),
                 )
                 .with_timezone("UTC"),
@@ -313,10 +313,10 @@ fn compile_filter(filter: &DrawerFilter) -> String {
         parts.push(format!("id IN ({})", quote_ids(&filter.ids)));
     }
     if let Some(wing) = &filter.wing {
-        parts.push(format!("wing = '{}'", escape_sql(wing.as_ref())));
+        parts.push(format!("wing = '{}'", escape_sql(wing.as_str())));
     }
     if let Some(room) = &filter.room {
-        parts.push(format!("room = '{}'", escape_sql(room.as_ref())));
+        parts.push(format!("room = '{}'", escape_sql(room.as_str())));
     }
     if let Some(hall) = &filter.hall {
         parts.push(format!("hall = '{}'", escape_sql(hall)));
@@ -329,7 +329,7 @@ fn compile_filter(filter: &DrawerFilter) -> String {
 }
 
 fn quote_ids(ids: &[DrawerId]) -> String {
-    ids.iter().map(|id| format!("'{}'", escape_sql(id.as_ref()))).collect::<Vec<_>>().join(", ")
+    ids.iter().map(|id| format!("'{}'", escape_sql(id.as_str()))).collect::<Vec<_>>().join(", ")
 }
 
 fn escape_sql(value: &str) -> String {
@@ -630,7 +630,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].record.room.as_ref(), "backend");
+        assert_eq!(results[0].record.room.as_str(), "backend");
     }
 
     #[tokio::test]

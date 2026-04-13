@@ -8,6 +8,8 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 pub enum StorageError {
     #[error(transparent)]
     Core(#[from] mempalace_core::MempalaceError),
+    #[error("invalid id: {0}")]
+    InvalidId(#[from] mempalace_core::IdError),
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("lancedb error: {0}")]

@@ -211,7 +211,7 @@ impl IngestManifestStore for SqliteOperationalStore {
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     run_id,
-                    entry.drawer_id.as_ref(),
+                    entry.drawer_id.as_str(),
                     entry.source_file,
                     entry.content_hash,
                     IngestRunStatus::Pending.as_str()
