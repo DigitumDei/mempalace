@@ -141,7 +141,8 @@ mod tests {
     use time::macros::{date, datetime};
 
     use super::StorageEngine;
-    use crate::types::{DrawerFilter, DuplicateStrategy, IngestCommitRequest};
+    use crate::sqlite::IngestManifestStore;
+    use crate::types::{DrawerFilter, DrawerStore, DuplicateStrategy, IngestCommitRequest};
     use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, WingId};
 
     fn embedding(seed: [f32; 4]) -> Vec<f32> {

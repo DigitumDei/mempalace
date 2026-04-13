@@ -561,6 +561,7 @@ fn decode_time(raw: String) -> Result<OffsetDateTime> {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::OptionalExtension;
     use tempfile::tempdir;
     use time::macros::datetime;
 
