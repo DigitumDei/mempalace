@@ -77,6 +77,7 @@ impl StorageEngine {
             Ok(()) => {
                 self.operational_store.mark_run_committed(
                     run.id,
+                    &request.source_key,
                     &request.source_file,
                     &request.content_hash,
                     request.drawers.len(),

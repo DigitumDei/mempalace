@@ -432,9 +432,9 @@ pub async fn ingest_project<P: EmbeddingProvider>(
                     continue;
                 }
 
-                if let Some(existing) =
-                    engine.operational_store().get_ingested_file(&file.relative_path)?
-                {
+                let source_key =
+                    source_key("projects", &root, &config.wing, None, &file.relative_path);
+                if let Some(existing) = engine.operational_store().get_ingested_file(&source_key)? {
                     if existing.content_hash == document.content_hash {
                         summary.skipped_unchanged += 1;
                         continue;
@@ -471,6 +471,7 @@ pub async fn ingest_project<P: EmbeddingProvider>(
 
                 replace_source_drawers(
                     engine,
+                    &source_key,
                     &file.relative_path,
                     "projects",
                     document.content_hash,
@@ -529,7 +530,14 @@ pub async fn ingest_conversations<P: EmbeddingProvider>(
             }
         };
         let content_hash = hash_bytes(&bytes);
-        if let Some(existing) = engine.operational_store().get_ingested_file(&file.relative_path)? {
+        let source_key = source_key(
+            "convos",
+            &root,
+            &wing_name,
+            Some(request.extract_mode.as_str()),
+            &file.relative_path,
+        );
+        if let Some(existing) = engine.operational_store().get_ingested_file(&source_key)? {
             if existing.content_hash == content_hash {
                 summary.skipped_unchanged += 1;
                 continue;
@@ -574,8 +582,15 @@ pub async fn ingest_conversations<P: EmbeddingProvider>(
                 .collect::<Vec<_>>(),
         )?;
 
-        replace_source_drawers(engine, &file.relative_path, "convos", content_hash, drawers)
-            .await?;
+        replace_source_drawers(
+            engine,
+            &source_key,
+            &file.relative_path,
+            "convos",
+            content_hash,
+            drawers,
+        )
+        .await?;
         summary.ingested_files += 1;
         summary.drawers_written += engine
             .drawer_store()
@@ -639,6 +654,7 @@ fn build_drawers<P: EmbeddingProvider>(
 
 async fn replace_source_drawers(
     engine: &StorageEngine,
+    source_key: &str,
     source_file: &str,
     ingest_kind: &str,
     content_hash: String,
@@ -656,7 +672,7 @@ async fn replace_source_drawers(
     engine
         .commit_ingest(IngestCommitRequest {
             ingest_kind: ingest_kind.to_owned(),
-            source_key: source_file.to_owned(),
+            source_key: source_key.to_owned(),
             source_file: source_file.to_owned(),
             content_hash,
             drawers,
@@ -1627,6 +1643,20 @@ fn hash_bytes(bytes: &[u8]) -> String {
 
 fn hash_text(text: &str) -> String {
     hash_bytes(text.as_bytes())
+}
+
+fn source_key(
+    ingest_kind: &str,
+    root: &Path,
+    wing: &str,
+    extract_mode: Option<&str>,
+    relative_path: &str,
+) -> String {
+    let root_key = hash_text(&root.to_string_lossy());
+    match extract_mode {
+        Some(mode) => format!("{ingest_kind}:{wing}:{mode}:{root_key}:{relative_path}"),
+        None => format!("{ingest_kind}:{wing}:{root_key}:{relative_path}"),
+    }
 }
 
 fn canonicalize_label(value: &str) -> String {
