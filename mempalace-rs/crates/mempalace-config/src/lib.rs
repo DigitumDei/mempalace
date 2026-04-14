@@ -5,5 +5,5 @@ mod config;
 
 pub use config::{
     ConfigFileV1, ConfigLoader, DEFAULT_BASE_DIR, DEFAULT_COLLECTION_NAME, MempalaceConfig,
-    ProjectConfig, ResolvedPaths,
+    ProjectConfig, ProjectRoomConfig, ResolvedPaths,
 };

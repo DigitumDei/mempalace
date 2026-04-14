@@ -10,9 +10,9 @@ use mempalace_config::{ConfigLoader, ProjectRoomConfig};
 use mempalace_core::{DrawerId, DrawerRecord, RoomId, WingId};
 use mempalace_embeddings::{EmbeddingProvider, EmbeddingRequest};
 use mempalace_storage::core::MempalaceError;
-use mempalace_storage::sqlite::IngestManifestStore;
 use mempalace_storage::{
-    DrawerFilter, DrawerStore, DuplicateStrategy, IngestCommitRequest, StorageEngine,
+    DrawerFilter, DrawerStore, DuplicateStrategy, IngestCommitRequest, IngestManifestStore,
+    StorageEngine,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -357,7 +357,7 @@ pub struct Chunk {
     pub date_hint: Option<Date>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MessageRole {
     User,
     Assistant,
@@ -856,7 +856,8 @@ fn detect_project_room(relative_path: &Path, content: &str, rooms: &[ProjectRoom
     for room in rooms {
         let mut score = content_lower.matches(&room.name.to_ascii_lowercase()).count();
         for keyword in &room.keywords {
-            score += content_lower.matches(&keyword.to_ascii_lowercase()).count();
+            let keyword_lower = keyword.to_ascii_lowercase();
+            score += content_lower.matches(keyword_lower.as_str()).count();
         }
         scores.insert(room.name.clone(), score);
     }
@@ -935,9 +936,10 @@ fn normalize_conversation(
 
     let lines = text.lines().collect::<Vec<_>>();
     if lines.iter().filter(|line| line.trim_start().starts_with('>')).count() >= 3 {
+        let transcript = text.into_owned();
         return Ok(NormalizedConversation {
-            transcript: text.into_owned(),
-            messages: transcript_to_messages(text.as_ref()),
+            messages: transcript_to_messages(&transcript),
+            transcript,
         });
     }
 
