@@ -257,11 +257,20 @@ impl ResolvedEmbeddingProfile {
 }
 
 /// fastembed-backed embedding provider.
-#[derive(Debug)]
 pub struct FastembedProvider {
     profile: ResolvedEmbeddingProfile,
     config: FastembedProviderConfig,
     backend: Option<TextEmbedding>,
+}
+
+impl fmt::Debug for FastembedProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FastembedProvider")
+            .field("profile", &self.profile)
+            .field("config", &self.config)
+            .field("backend_initialized", &self.backend.is_some())
+            .finish()
+    }
 }
 
 impl FastembedProvider {
@@ -397,12 +406,9 @@ fn build_init_options(
         EmbeddingProfile::LowCpu => EmbeddingModel::AllMiniLML6V2Q,
     };
 
-    Ok(InitOptions {
-        model_name,
-        show_download_progress: config.show_download_progress,
-        cache_dir: config.cache_root.clone(),
-        ..InitOptions::default()
-    })
+    Ok(InitOptions::new(model_name)
+        .with_show_download_progress(config.show_download_progress)
+        .with_cache_dir(config.cache_root.clone()))
 }
 
 #[derive(Debug, Default)]
