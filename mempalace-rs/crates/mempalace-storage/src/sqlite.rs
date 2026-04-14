@@ -5,8 +5,8 @@ use time::OffsetDateTime;
 
 use crate::error::{Result, StorageError};
 use crate::types::{
-    ConfigEntry, EntityRecord, GraphDocument, IngestManifestEntry, IngestRun, IngestRunStatus,
-    RetryableRun, ToolStateEntry,
+    ConfigEntry, EntityRecord, GraphDocument, IngestFileRecord, IngestManifestEntry, IngestRun,
+    IngestRunStatus, RetryableRun, ToolStateEntry,
 };
 use mempalace_core::DrawerId;
 
@@ -93,6 +93,7 @@ pub trait IngestManifestStore {
     fn stale_pending_runs(&self, older_than: OffsetDateTime) -> Result<Vec<RetryableRun>>;
     fn mark_run_failed(&self, run_id: i64, reason: &str, failed_at: OffsetDateTime) -> Result<()>;
     fn committed_drawer_ids(&self) -> Result<Vec<DrawerId>>;
+    fn get_ingested_file(&self, source_file: &str) -> Result<Option<IngestFileRecord>>;
 }
 
 pub trait EntityRegistryStore {
@@ -373,6 +374,43 @@ impl IngestManifestStore for SqliteOperationalStore {
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
+    }
+
+    fn get_ingested_file(&self, source_file: &str) -> Result<Option<IngestFileRecord>> {
+        let connection = self.open_connection()?;
+        connection
+            .query_row(
+                "SELECT source_file, content_hash, last_ingested_at, ingest_kind, drawer_count
+                 FROM ingest_files
+                 WHERE source_file = ?1",
+                [source_file],
+                |row| {
+                    let drawer_count: i64 = row.get(4)?;
+                    Ok(IngestFileRecord {
+                        source_file: row.get(0)?,
+                        content_hash: row.get(1)?,
+                        last_ingested_at: decode_time(row.get(2)?).map_err(|err| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Text,
+                                Box::new(err),
+                            )
+                        })?,
+                        ingest_kind: row.get(3)?,
+                        drawer_count: usize::try_from(drawer_count).map_err(|_| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                4,
+                                rusqlite::types::Type::Integer,
+                                Box::new(StorageError::Invariant(format!(
+                                    "invalid drawer_count `{drawer_count}`"
+                                ))),
+                            )
+                        })?,
+                    })
+                },
+            )
+            .optional()
             .map_err(StorageError::from)
     }
 }
