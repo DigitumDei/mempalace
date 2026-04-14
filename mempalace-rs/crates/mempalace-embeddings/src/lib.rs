@@ -1,5 +1,6 @@
 //! Embedding provider contracts and fastembed-backed runtime support.
 
+use std::env;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -263,8 +264,8 @@ impl ResolvedEmbeddingProfile {
             EmbeddingProfile::LowCpu => Self {
                 metadata: profile.metadata(),
                 warm_query_p95_budget_ms: 1_500,
-                low_cpu_idle_rss_budget_mb: Some(700),
-                low_cpu_ingest_rss_budget_mb: Some(1_200),
+                low_cpu_idle_rss_budget_mb: Some(450),
+                low_cpu_ingest_rss_budget_mb: Some(850),
             },
         }
     }
@@ -295,7 +296,8 @@ impl FastembedProvider {
 
     /// Initializes the backend after startup validation passes.
     pub fn try_initialize(mut self) -> Result<Self> {
-        let validation = self.startup_validation()?;
+        let cache_root = effective_cache_root(&self.config);
+        let validation = validate_cache(self.profile, &cache_root)?;
         if !validation.is_ready() && !self.config.allow_downloads {
             return Err(EmbeddingError::OfflineStartup {
                 model_id: self.profile.metadata.model_id.to_owned(),
@@ -303,7 +305,13 @@ impl FastembedProvider {
             });
         }
 
-        let options = build_init_options(self.profile, &self.config)?;
+        if matches!(validation.status, StartupValidationStatus::CorruptedCache)
+            && self.config.allow_downloads
+        {
+            purge_model_cache(self.profile, &cache_root)?;
+        }
+
+        let options = build_init_options(self.profile, &self.config, &cache_root)?;
         let backend =
             TextEmbedding::try_new(options).map_err(|source| EmbeddingError::Backend {
                 model_id: self.profile.metadata.model_id.to_owned(),
@@ -326,7 +334,8 @@ impl EmbeddingProvider for FastembedProvider {
     }
 
     fn startup_validation(&self) -> Result<StartupValidation> {
-        validate_cache(self.profile, &self.config.cache_root)
+        let cache_root = effective_cache_root(&self.config);
+        validate_cache(self.profile, &cache_root)
     }
 
     fn embed(&mut self, request: &EmbeddingRequest) -> Result<EmbeddingResponse> {
@@ -421,12 +430,13 @@ pub fn validate_cache(
 fn build_init_options(
     profile: ResolvedEmbeddingProfile,
     config: &FastembedProviderConfig,
+    cache_root: &Path,
 ) -> Result<InitOptions> {
     let model_name = resolve_fastembed_model_layout(profile)?.model_name;
 
     Ok(InitOptions::new(model_name)
         .with_show_download_progress(config.show_download_progress)
-        .with_cache_dir(config.cache_root.clone()))
+        .with_cache_dir(cache_root.to_path_buf()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -529,22 +539,14 @@ fn resolve_model_files_root(model_root: &Path) -> Result<Option<PathBuf>> {
     }
 
     let active_ref = model_root.join("refs").join("main");
-    if active_ref.exists() {
-        let revision = fs::read_to_string(&active_ref)
-            .map_err(|source| EmbeddingError::CacheRead { path: active_ref.clone(), source })?;
-        let snapshot_root = snapshots_root.join(revision.trim());
-        if snapshot_root.is_dir() {
-            return Ok(Some(snapshot_root));
-        }
+    if !active_ref.exists() {
+        return Ok(None);
     }
 
-    let mut snapshots = fs::read_dir(&snapshots_root)
-        .map_err(|source| EmbeddingError::CacheRead { path: snapshots_root.clone(), source })?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.is_dir())
-        .collect::<Vec<_>>();
-    snapshots.sort();
-    Ok(snapshots.into_iter().next())
+    let revision = fs::read_to_string(&active_ref)
+        .map_err(|source| EmbeddingError::CacheRead { path: active_ref.clone(), source })?;
+    let snapshot_root = snapshots_root.join(revision.trim());
+    if snapshot_root.is_dir() { Ok(Some(snapshot_root)) } else { Ok(None) }
 }
 
 fn count_files(root: &Path) -> Result<usize> {
@@ -631,6 +633,19 @@ fn json_file_is_invalid(path: &Path) -> Result<bool> {
     Ok(serde_json::from_str::<serde_json::Value>(&body).is_err())
 }
 
+fn effective_cache_root(config: &FastembedProviderConfig) -> PathBuf {
+    env::var_os("HF_HOME").map(PathBuf::from).unwrap_or_else(|| config.cache_root.clone())
+}
+
+fn purge_model_cache(profile: ResolvedEmbeddingProfile, cache_root: &Path) -> Result<()> {
+    let model_root = cache_root.join(resolve_fastembed_model_layout(profile)?.model_cache_dir);
+    match fs::remove_dir_all(&model_root) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(EmbeddingError::CacheRead { path: model_root, source }),
+    }
+}
+
 fn percentile_millis(samples: &[Duration], percentile: f64) -> Option<f64> {
     if samples.is_empty() {
         return None;
@@ -675,11 +690,13 @@ mod tests {
     use super::{
         EmbeddingBenchmark, EmbeddingError, EmbeddingProvider, EmbeddingRequest, EmbeddingResponse,
         FastembedProvider, FastembedProviderConfig, ResolvedEmbeddingProfile,
-        StartupValidationStatus, build_init_options, percentile_millis,
+        StartupValidationStatus, build_init_options, effective_cache_root, percentile_millis,
         resolve_fastembed_model_layout, validate_cache,
     };
+    use std::env;
     use std::fs;
     use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
     use fastembed::EmbeddingModel;
@@ -690,6 +707,40 @@ mod tests {
         profile: ResolvedEmbeddingProfile,
         response: Vec<Vec<f32>>,
         calls: usize,
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct ScopedEnvVar {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let previous = env::var_os(key);
+            // SAFETY: tests serialize environment mutation through `env_lock`.
+            unsafe { env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(previous) => {
+                    // SAFETY: tests serialize environment mutation through `env_lock`.
+                    unsafe { env::set_var(self.key, previous) };
+                }
+                None => {
+                    // SAFETY: tests serialize environment mutation through `env_lock`.
+                    unsafe { env::remove_var(self.key) };
+                }
+            }
+        }
     }
 
     impl EmbeddingProvider for StubProvider {
@@ -739,8 +790,8 @@ mod tests {
         assert_eq!(resolved.metadata.model_id, "Xenova/all-MiniLM-L6-v2");
         assert_eq!(resolved.metadata.dimensions, 384);
         assert_eq!(resolved.warm_query_p95_budget_ms, 1_500);
-        assert_eq!(resolved.low_cpu_idle_rss_budget_mb, Some(700));
-        assert_eq!(resolved.low_cpu_ingest_rss_budget_mb, Some(1_200));
+        assert_eq!(resolved.low_cpu_idle_rss_budget_mb, Some(450));
+        assert_eq!(resolved.low_cpu_ingest_rss_budget_mb, Some(850));
     }
 
     #[test]
@@ -831,6 +882,48 @@ mod tests {
     }
 
     #[test]
+    fn validation_rejects_missing_main_ref_even_with_complete_snapshot() {
+        let dir = tempdir().unwrap();
+        let model_root = write_fastembed_snapshot(dir.path(), EmbeddingProfile::Balanced)
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        fs::remove_file(model_root.join("refs/main")).unwrap();
+
+        let report = validate_cache(
+            ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::Balanced),
+            dir.path(),
+        )
+        .unwrap();
+
+        assert_eq!(report.status, StartupValidationStatus::PartialDownload);
+    }
+
+    #[test]
+    fn validation_rejects_stale_main_ref_even_with_complete_alternate_snapshot() {
+        let dir = tempdir().unwrap();
+        let model_root = write_fastembed_snapshot(dir.path(), EmbeddingProfile::Balanced)
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let alternate_snapshot = model_root.join("snapshots").join("alternate-revision");
+        fs::create_dir_all(&alternate_snapshot).unwrap();
+        fs::write(model_root.join("refs/main"), "missing-revision\n").unwrap();
+
+        let report = validate_cache(
+            ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::Balanced),
+            dir.path(),
+        )
+        .unwrap();
+
+        assert_eq!(report.status, StartupValidationStatus::PartialDownload);
+    }
+
+    #[test]
     fn validation_uses_selected_model_cache_layout() {
         let dir = tempdir().unwrap();
         write_fastembed_snapshot(dir.path(), EmbeddingProfile::Balanced);
@@ -867,6 +960,65 @@ mod tests {
 
         let err = provider.try_initialize().unwrap_err();
         assert!(matches!(err, EmbeddingError::OfflineStartup { .. }));
+    }
+
+    #[test]
+    fn provider_refuses_offline_startup_with_partial_download() {
+        let dir = tempdir().unwrap();
+        let snapshot_root = write_fastembed_snapshot(dir.path(), EmbeddingProfile::Balanced);
+        fs::remove_file(snapshot_root.join("tokenizer.json")).unwrap();
+
+        let provider = FastembedProvider::new(
+            EmbeddingProfile::Balanced,
+            FastembedProviderConfig::new(dir.path()),
+        );
+
+        let err = provider.try_initialize().unwrap_err();
+        assert!(matches!(err, EmbeddingError::OfflineStartup { .. }));
+    }
+
+    #[test]
+    fn ready_cache_builds_offline_runtime_options() {
+        let dir = tempdir().unwrap();
+        write_fastembed_snapshot(dir.path(), EmbeddingProfile::Balanced);
+
+        let provider = FastembedProvider::new(
+            EmbeddingProfile::Balanced,
+            FastembedProviderConfig::new(dir.path()),
+        );
+        let validation = provider.startup_validation().unwrap();
+        let options = build_init_options(
+            ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::Balanced),
+            &FastembedProviderConfig::new(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
+
+        assert_eq!(validation.status, StartupValidationStatus::Ready);
+        assert_eq!(options.cache_dir, dir.path());
+    }
+
+    #[test]
+    fn hf_home_overrides_configured_cache_root_for_validation_and_runtime() {
+        let _guard = env_lock().lock().unwrap();
+        let configured_root = tempdir().unwrap();
+        let hf_home_root = tempdir().unwrap();
+        write_fastembed_snapshot(hf_home_root.path(), EmbeddingProfile::Balanced);
+        let _hf_home = ScopedEnvVar::set("HF_HOME", hf_home_root.path());
+
+        let config = FastembedProviderConfig::new(configured_root.path());
+        let provider = FastembedProvider::new(EmbeddingProfile::Balanced, config.clone());
+        let validation = provider.startup_validation().unwrap();
+        let options = build_init_options(
+            ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::Balanced),
+            &config,
+            &effective_cache_root(&config),
+        )
+        .unwrap();
+
+        assert_eq!(validation.status, StartupValidationStatus::Ready);
+        assert_eq!(validation.cache_root, hf_home_root.path());
+        assert_eq!(options.cache_dir, hf_home_root.path());
     }
 
     #[test]

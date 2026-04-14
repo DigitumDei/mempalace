@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-fastembed = "5.13.2"
+fastembed = { version = "5.13.2", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
 mempalace-core = { path = "../mempalace-core" }
 serde_json.workspace = true
 thiserror.workspace = true
