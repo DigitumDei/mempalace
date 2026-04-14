@@ -102,7 +102,8 @@ fn log_init_outcome(
             config_file = %config_file.display(),
             palace_path = %palace_path.display(),
             embedding_profile = embedding_profile.as_str(),
-            "mempalace cli foundation initialized"
+            "{}",
+            init_outcome_message(validation_status)
         ),
         StartupValidationStatus::MissingAssets | StartupValidationStatus::PartialDownload => {
             tracing::warn!(
@@ -110,7 +111,8 @@ fn log_init_outcome(
                 palace_path = %palace_path.display(),
                 embedding_profile = embedding_profile.as_str(),
                 startup_validation = %validation_status,
-                "mempalace cli foundation initialized; embedding assets must be downloaded before offline use"
+                "{}",
+                init_outcome_message(validation_status)
             )
         }
         StartupValidationStatus::CorruptedCache => tracing::warn!(
@@ -118,15 +120,29 @@ fn log_init_outcome(
             palace_path = %palace_path.display(),
             embedding_profile = embedding_profile.as_str(),
             startup_validation = %validation_status,
-            "mempalace cli foundation initialized; embedding cache is corrupted and must be refreshed"
+            "{}",
+            init_outcome_message(validation_status)
         ),
+    }
+}
+
+fn init_outcome_message(validation_status: StartupValidationStatus) -> &'static str {
+    match validation_status {
+        StartupValidationStatus::Ready => "mempalace cli foundation initialized",
+        StartupValidationStatus::MissingAssets | StartupValidationStatus::PartialDownload => {
+            "mempalace cli foundation configured; embedding assets must be downloaded before offline use"
+        }
+        StartupValidationStatus::CorruptedCache => {
+            "mempalace cli foundation configured; embedding cache is corrupted and must be refreshed"
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, EmbeddingProfile, StartupValidationStatus, log_init_outcome, parse_args, usage,
+        Command, EmbeddingProfile, StartupValidationStatus, init_outcome_message, log_init_outcome,
+        parse_args, usage,
     };
     use std::path::Path;
 
@@ -169,5 +185,21 @@ mod tests {
                 status,
             );
         }
+    }
+
+    #[test]
+    fn init_outcome_warning_states_use_configured_wording() {
+        assert_eq!(
+            init_outcome_message(StartupValidationStatus::MissingAssets),
+            "mempalace cli foundation configured; embedding assets must be downloaded before offline use"
+        );
+        assert_eq!(
+            init_outcome_message(StartupValidationStatus::PartialDownload),
+            "mempalace cli foundation configured; embedding assets must be downloaded before offline use"
+        );
+        assert_eq!(
+            init_outcome_message(StartupValidationStatus::CorruptedCache),
+            "mempalace cli foundation configured; embedding cache is corrupted and must be refreshed"
+        );
     }
 }
