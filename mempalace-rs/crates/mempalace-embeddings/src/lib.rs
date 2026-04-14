@@ -634,7 +634,14 @@ fn json_file_is_invalid(path: &Path) -> Result<bool> {
 }
 
 fn effective_cache_root(config: &FastembedProviderConfig) -> PathBuf {
-    env::var_os("HF_HOME").map(PathBuf::from).unwrap_or_else(|| config.cache_root.clone())
+    effective_cache_root_from_hf_home(config, env::var_os("HF_HOME").as_deref())
+}
+
+fn effective_cache_root_from_hf_home(
+    config: &FastembedProviderConfig,
+    hf_home: Option<&std::ffi::OsStr>,
+) -> PathBuf {
+    hf_home.map(PathBuf::from).unwrap_or_else(|| config.cache_root.clone())
 }
 
 fn purge_model_cache(profile: ResolvedEmbeddingProfile, cache_root: &Path) -> Result<()> {
@@ -690,13 +697,11 @@ mod tests {
     use super::{
         EmbeddingBenchmark, EmbeddingError, EmbeddingProvider, EmbeddingRequest, EmbeddingResponse,
         FastembedProvider, FastembedProviderConfig, ResolvedEmbeddingProfile,
-        StartupValidationStatus, build_init_options, effective_cache_root, percentile_millis,
-        resolve_fastembed_model_layout, validate_cache,
+        StartupValidationStatus, build_init_options, effective_cache_root_from_hf_home,
+        percentile_millis, resolve_fastembed_model_layout, validate_cache,
     };
-    use std::env;
     use std::fs;
     use std::path::Path;
-    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
     use fastembed::EmbeddingModel;
@@ -707,40 +712,6 @@ mod tests {
         profile: ResolvedEmbeddingProfile,
         response: Vec<Vec<f32>>,
         calls: usize,
-    }
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct ScopedEnvVar {
-        key: &'static str,
-        previous: Option<std::ffi::OsString>,
-    }
-
-    impl ScopedEnvVar {
-        fn set(key: &'static str, value: &Path) -> Self {
-            let previous = env::var_os(key);
-            // SAFETY: tests serialize environment mutation through `env_lock`.
-            unsafe { env::set_var(key, value) };
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for ScopedEnvVar {
-        fn drop(&mut self) {
-            match &self.previous {
-                Some(previous) => {
-                    // SAFETY: tests serialize environment mutation through `env_lock`.
-                    unsafe { env::set_var(self.key, previous) };
-                }
-                None => {
-                    // SAFETY: tests serialize environment mutation through `env_lock`.
-                    unsafe { env::remove_var(self.key) };
-                }
-            }
-        }
     }
 
     impl EmbeddingProvider for StubProvider {
@@ -799,6 +770,7 @@ mod tests {
         let options = build_init_options(
             ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::LowCpu),
             &FastembedProviderConfig::new("cache"),
+            Path::new("cache"),
         )
         .unwrap();
 
@@ -999,20 +971,23 @@ mod tests {
     }
 
     #[test]
-    fn hf_home_overrides_configured_cache_root_for_validation_and_runtime() {
-        let _guard = env_lock().lock().unwrap();
+    fn hf_home_override_is_applied_consistently_for_validation_and_runtime() {
         let configured_root = tempdir().unwrap();
         let hf_home_root = tempdir().unwrap();
         write_fastembed_snapshot(hf_home_root.path(), EmbeddingProfile::Balanced);
-        let _hf_home = ScopedEnvVar::set("HF_HOME", hf_home_root.path());
 
         let config = FastembedProviderConfig::new(configured_root.path());
-        let provider = FastembedProvider::new(EmbeddingProfile::Balanced, config.clone());
-        let validation = provider.startup_validation().unwrap();
+        let effective_root =
+            effective_cache_root_from_hf_home(&config, Some(hf_home_root.path().as_os_str()));
+        let validation = validate_cache(
+            ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::Balanced),
+            &effective_root,
+        )
+        .unwrap();
         let options = build_init_options(
             ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::Balanced),
             &config,
-            &effective_cache_root(&config),
+            &effective_root,
         )
         .unwrap();
 
