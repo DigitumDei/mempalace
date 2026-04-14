@@ -531,11 +531,12 @@ mod tests {
     use super::{
         EmbeddingBenchmark, EmbeddingError, EmbeddingProvider, EmbeddingRequest, EmbeddingResponse,
         FastembedProvider, FastembedProviderConfig, ResolvedEmbeddingProfile,
-        StartupValidationStatus, percentile_millis, validate_cache,
+        StartupValidationStatus, build_init_options, percentile_millis, validate_cache,
     };
     use std::fs;
     use std::time::Duration;
 
+    use fastembed::EmbeddingModel;
     use mempalace_core::EmbeddingProfile;
     use tempfile::tempdir;
 
