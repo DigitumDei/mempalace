@@ -174,10 +174,24 @@ impl EmbeddingBenchmark {
         request: &EmbeddingRequest,
         iterations: usize,
     ) -> Result<Self> {
+        Self::measure_with_warmup(provider, request, 3, iterations)
+    }
+
+    /// Measures repeated embedding requests after discarding warmup iterations.
+    pub fn measure_with_warmup<P: EmbeddingProvider>(
+        provider: &mut P,
+        request: &EmbeddingRequest,
+        warmup_iterations: usize,
+        iterations: usize,
+    ) -> Result<Self> {
         if iterations == 0 {
             return Err(EmbeddingError::Benchmark(
                 "iterations must be greater than zero".to_owned(),
             ));
+        }
+
+        for _ in 0..warmup_iterations {
+            let _ = provider.embed(request)?;
         }
 
         let mut samples = Vec::with_capacity(iterations);
@@ -359,7 +373,8 @@ pub fn validate_cache(
     profile: ResolvedEmbeddingProfile,
     cache_root: &Path,
 ) -> Result<StartupValidation> {
-    let discovered = discover_cache_assets(cache_root)?;
+    let model_layout = resolve_fastembed_model_layout(profile)?;
+    let discovered = discover_cache_assets(cache_root, &model_layout)?;
     let model_id = profile.metadata.model_id;
 
     let status = if discovered.files_found == 0 {
@@ -367,9 +382,11 @@ pub fn validate_cache(
     } else if !discovered.zero_length_files.is_empty() || !discovered.invalid_json_files.is_empty()
     {
         StartupValidationStatus::CorruptedCache
-    } else if discovered.onnx_files == 0
+    } else if discovered.model_files == 0
         || discovered.tokenizer_json_files == 0
         || discovered.config_json_files == 0
+        || discovered.special_tokens_map_json_files == 0
+        || discovered.tokenizer_config_json_files == 0
     {
         StartupValidationStatus::PartialDownload
     } else {
@@ -384,8 +401,12 @@ pub fn validate_cache(
             format!("no local cache assets found for {model_id}")
         }
         StartupValidationStatus::PartialDownload => format!(
-            "cache for {model_id} is incomplete: onnx={}, tokenizer_json={}, config_json={}",
-            discovered.onnx_files, discovered.tokenizer_json_files, discovered.config_json_files
+            "cache for {model_id} is incomplete: model_file={}, tokenizer_json={}, config_json={}, special_tokens_map_json={}, tokenizer_config_json={}",
+            discovered.model_files,
+            discovered.tokenizer_json_files,
+            discovered.config_json_files,
+            discovered.special_tokens_map_json_files,
+            discovered.tokenizer_config_json_files
         ),
         StartupValidationStatus::CorruptedCache => format!(
             "cache for {model_id} is corrupted: zero_length={}, invalid_json={}",
@@ -401,33 +422,134 @@ fn build_init_options(
     profile: ResolvedEmbeddingProfile,
     config: &FastembedProviderConfig,
 ) -> Result<InitOptions> {
-    let model_name = match profile.metadata.profile {
-        EmbeddingProfile::Balanced => EmbeddingModel::AllMiniLML6V2,
-        EmbeddingProfile::LowCpu => EmbeddingModel::AllMiniLML6V2Q,
-    };
+    let model_name = resolve_fastembed_model_layout(profile)?.model_name;
 
     Ok(InitOptions::new(model_name)
         .with_show_download_progress(config.show_download_progress)
         .with_cache_dir(config.cache_root.clone()))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FastembedModelLayout {
+    model_name: EmbeddingModel,
+    model_cache_dir: PathBuf,
+    model_file: PathBuf,
+}
+
+fn resolve_fastembed_model_layout(
+    profile: ResolvedEmbeddingProfile,
+) -> Result<FastembedModelLayout> {
+    let model_name = match profile.metadata.profile {
+        EmbeddingProfile::Balanced => EmbeddingModel::AllMiniLML6V2,
+        EmbeddingProfile::LowCpu => EmbeddingModel::AllMiniLML6V2Q,
+    };
+    let model_info =
+        TextEmbedding::get_model_info(&model_name).map_err(|source| EmbeddingError::Backend {
+            model_id: profile.metadata.model_id.to_owned(),
+            message: source.to_string(),
+        })?;
+
+    Ok(FastembedModelLayout {
+        model_name,
+        model_cache_dir: PathBuf::from(format!(
+            "models--{}",
+            model_info.model_code.replace('/', "--")
+        )),
+        model_file: PathBuf::from(&model_info.model_file),
+    })
+}
+
 #[derive(Debug, Default)]
 struct CacheAssets {
     files_found: usize,
-    onnx_files: usize,
+    model_files: usize,
     tokenizer_json_files: usize,
     config_json_files: usize,
+    special_tokens_map_json_files: usize,
+    tokenizer_config_json_files: usize,
     zero_length_files: Vec<PathBuf>,
     invalid_json_files: Vec<PathBuf>,
 }
 
-fn discover_cache_assets(root: &Path) -> Result<CacheAssets> {
-    if !root.exists() {
+fn discover_cache_assets(
+    cache_root: &Path,
+    model_layout: &FastembedModelLayout,
+) -> Result<CacheAssets> {
+    let model_root = cache_root.join(&model_layout.model_cache_dir);
+    if !model_root.exists() {
         return Ok(CacheAssets::default());
     }
 
-    let mut pending = vec![root.to_path_buf()];
     let mut assets = CacheAssets::default();
+    assets.files_found = count_files(&model_root)?;
+
+    let files_root = match resolve_model_files_root(&model_root)? {
+        Some(files_root) => files_root,
+        None => return Ok(assets),
+    };
+
+    inspect_required_file(
+        &files_root.join(&model_layout.model_file),
+        &mut assets,
+        RequiredFile::Model,
+    )?;
+    inspect_required_file(
+        &files_root.join("tokenizer.json"),
+        &mut assets,
+        RequiredFile::TokenizerJson,
+    )?;
+    inspect_required_file(&files_root.join("config.json"), &mut assets, RequiredFile::ConfigJson)?;
+    inspect_required_file(
+        &files_root.join("special_tokens_map.json"),
+        &mut assets,
+        RequiredFile::SpecialTokensMapJson,
+    )?;
+    inspect_required_file(
+        &files_root.join("tokenizer_config.json"),
+        &mut assets,
+        RequiredFile::TokenizerConfigJson,
+    )?;
+
+    Ok(assets)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequiredFile {
+    Model,
+    TokenizerJson,
+    ConfigJson,
+    SpecialTokensMapJson,
+    TokenizerConfigJson,
+}
+
+fn resolve_model_files_root(model_root: &Path) -> Result<Option<PathBuf>> {
+    let snapshots_root = model_root.join("snapshots");
+    if !snapshots_root.exists() {
+        return Ok(Some(model_root.to_path_buf()));
+    }
+
+    let active_ref = model_root.join("refs").join("main");
+    if active_ref.exists() {
+        let revision = fs::read_to_string(&active_ref)
+            .map_err(|source| EmbeddingError::CacheRead { path: active_ref.clone(), source })?;
+        let snapshot_root = snapshots_root.join(revision.trim());
+        if snapshot_root.is_dir() {
+            return Ok(Some(snapshot_root));
+        }
+    }
+
+    let mut snapshots = fs::read_dir(&snapshots_root)
+        .map_err(|source| EmbeddingError::CacheRead { path: snapshots_root.clone(), source })?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    snapshots.sort();
+    Ok(snapshots.into_iter().next())
+}
+
+fn count_files(root: &Path) -> Result<usize> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut count = 0;
 
     while let Some(path) = pending.pop() {
         let entries = fs::read_dir(&path)
@@ -443,41 +565,63 @@ fn discover_cache_assets(root: &Path) -> Result<CacheAssets> {
 
             if metadata.is_dir() {
                 pending.push(entry_path);
-                continue;
-            }
-
-            if !metadata.is_file() {
-                continue;
-            }
-
-            assets.files_found += 1;
-            if metadata.len() == 0 {
-                assets.zero_length_files.push(entry_path.clone());
-            }
-
-            let file_name = entry.file_name();
-            let file_name = file_name.to_string_lossy();
-            if file_name.ends_with(".onnx") {
-                assets.onnx_files += 1;
-            }
-
-            if file_name == "tokenizer.json" {
-                assets.tokenizer_json_files += 1;
-                if json_file_is_invalid(&entry_path)? {
-                    assets.invalid_json_files.push(entry_path.clone());
-                }
-            }
-
-            if file_name == "config.json" {
-                assets.config_json_files += 1;
-                if json_file_is_invalid(&entry_path)? {
-                    assets.invalid_json_files.push(entry_path);
-                }
+            } else if metadata.is_file() {
+                count += 1;
             }
         }
     }
 
-    Ok(assets)
+    Ok(count)
+}
+
+fn inspect_required_file(
+    path: &Path,
+    assets: &mut CacheAssets,
+    required_file: RequiredFile,
+) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let metadata = fs::metadata(path)
+        .map_err(|source| EmbeddingError::CacheRead { path: path.to_path_buf(), source })?;
+    if !metadata.is_file() {
+        return Ok(());
+    }
+
+    if metadata.len() == 0 {
+        assets.zero_length_files.push(path.to_path_buf());
+    }
+
+    match required_file {
+        RequiredFile::Model => assets.model_files += 1,
+        RequiredFile::TokenizerJson => {
+            assets.tokenizer_json_files += 1;
+            if json_file_is_invalid(path)? {
+                assets.invalid_json_files.push(path.to_path_buf());
+            }
+        }
+        RequiredFile::ConfigJson => {
+            assets.config_json_files += 1;
+            if json_file_is_invalid(path)? {
+                assets.invalid_json_files.push(path.to_path_buf());
+            }
+        }
+        RequiredFile::SpecialTokensMapJson => {
+            assets.special_tokens_map_json_files += 1;
+            if json_file_is_invalid(path)? {
+                assets.invalid_json_files.push(path.to_path_buf());
+            }
+        }
+        RequiredFile::TokenizerConfigJson => {
+            assets.tokenizer_config_json_files += 1;
+            if json_file_is_invalid(path)? {
+                assets.invalid_json_files.push(path.to_path_buf());
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn json_file_is_invalid(path: &Path) -> Result<bool> {
@@ -531,9 +675,11 @@ mod tests {
     use super::{
         EmbeddingBenchmark, EmbeddingError, EmbeddingProvider, EmbeddingRequest, EmbeddingResponse,
         FastembedProvider, FastembedProviderConfig, ResolvedEmbeddingProfile,
-        StartupValidationStatus, build_init_options, percentile_millis, validate_cache,
+        StartupValidationStatus, build_init_options, percentile_millis,
+        resolve_fastembed_model_layout, validate_cache,
     };
     use std::fs;
+    use std::path::Path;
     use std::time::Duration;
 
     use fastembed::EmbeddingModel;
@@ -543,6 +689,7 @@ mod tests {
     struct StubProvider {
         profile: ResolvedEmbeddingProfile,
         response: Vec<Vec<f32>>,
+        calls: usize,
     }
 
     impl EmbeddingProvider for StubProvider {
@@ -555,6 +702,7 @@ mod tests {
         }
 
         fn embed(&mut self, request: &EmbeddingRequest) -> super::Result<EmbeddingResponse> {
+            self.calls += 1;
             let vectors = self.response.iter().take(request.len()).cloned().collect::<Vec<_>>();
             EmbeddingResponse::new(
                 vectors,
@@ -609,9 +757,7 @@ mod tests {
     #[test]
     fn validation_reports_warm_cache() {
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("model.onnx"), "onnx").unwrap();
-        fs::write(dir.path().join("tokenizer.json"), "{}").unwrap();
-        fs::write(dir.path().join("config.json"), "{}").unwrap();
+        write_fastembed_snapshot(dir.path(), EmbeddingProfile::Balanced);
 
         let report = validate_cache(
             ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::Balanced),
@@ -638,7 +784,8 @@ mod tests {
     #[test]
     fn validation_reports_partial_download() {
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("tokenizer.json"), "{}").unwrap();
+        let snapshot_root = write_fastembed_snapshot(dir.path(), EmbeddingProfile::Balanced);
+        fs::remove_file(snapshot_root.join("tokenizer_config.json")).unwrap();
 
         let report = validate_cache(
             ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::Balanced),
@@ -652,9 +799,8 @@ mod tests {
     #[test]
     fn validation_reports_corrupted_cache_for_invalid_json() {
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("model.onnx"), "onnx").unwrap();
-        fs::write(dir.path().join("tokenizer.json"), "{not-json").unwrap();
-        fs::write(dir.path().join("config.json"), "{}").unwrap();
+        let snapshot_root = write_fastembed_snapshot(dir.path(), EmbeddingProfile::Balanced);
+        fs::write(snapshot_root.join("special_tokens_map.json"), "{not-json").unwrap();
 
         let report = validate_cache(
             ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::Balanced),
@@ -666,10 +812,56 @@ mod tests {
     }
 
     #[test]
+    fn validation_reports_corrupted_cache_for_zero_length_model_file() {
+        let dir = tempdir().unwrap();
+        let snapshot_root = write_fastembed_snapshot(dir.path(), EmbeddingProfile::LowCpu);
+        let model_layout = resolve_fastembed_model_layout(ResolvedEmbeddingProfile::from_profile(
+            EmbeddingProfile::LowCpu,
+        ))
+        .unwrap();
+        fs::write(snapshot_root.join(model_layout.model_file), "").unwrap();
+
+        let report = validate_cache(
+            ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::LowCpu),
+            dir.path(),
+        )
+        .unwrap();
+
+        assert_eq!(report.status, StartupValidationStatus::CorruptedCache);
+    }
+
+    #[test]
+    fn validation_uses_selected_model_cache_layout() {
+        let dir = tempdir().unwrap();
+        write_fastembed_snapshot(dir.path(), EmbeddingProfile::Balanced);
+
+        let report = validate_cache(
+            ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::LowCpu),
+            dir.path(),
+        )
+        .unwrap();
+
+        assert_eq!(report.status, StartupValidationStatus::MissingAssets);
+    }
+
+    #[test]
     fn provider_refuses_offline_startup_without_assets() {
         let dir = tempdir().unwrap();
         let provider = FastembedProvider::new(
             EmbeddingProfile::Balanced,
+            FastembedProviderConfig::new(dir.path()),
+        );
+
+        let err = provider.try_initialize().unwrap_err();
+        assert!(matches!(err, EmbeddingError::OfflineStartup { .. }));
+    }
+
+    #[test]
+    fn provider_refuses_offline_startup_with_mixed_cache() {
+        let dir = tempdir().unwrap();
+        write_fastembed_snapshot(dir.path(), EmbeddingProfile::Balanced);
+        let provider = FastembedProvider::new(
+            EmbeddingProfile::LowCpu,
             FastembedProviderConfig::new(dir.path()),
         );
 
@@ -696,11 +888,29 @@ mod tests {
         let mut provider = StubProvider {
             profile: ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::Balanced),
             response: vec![vec![0.0; 384]],
+            calls: 0,
         };
 
         let benchmark = EmbeddingBenchmark::measure(&mut provider, &request, 3).unwrap();
         assert_eq!(benchmark.samples.len(), 3);
+        assert_eq!(provider.calls, 6);
         assert!(benchmark.p95_millis().unwrap() >= 0.0);
+    }
+
+    #[test]
+    fn benchmark_excludes_warmup_requests_from_samples() {
+        let request = EmbeddingRequest::new(vec!["hello".to_owned()]).unwrap();
+        let mut provider = StubProvider {
+            profile: ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::Balanced),
+            response: vec![vec![0.0; 384]],
+            calls: 0,
+        };
+
+        let benchmark =
+            EmbeddingBenchmark::measure_with_warmup(&mut provider, &request, 2, 4).unwrap();
+
+        assert_eq!(provider.calls, 6);
+        assert_eq!(benchmark.samples.len(), 4);
     }
 
     #[test]
@@ -713,5 +923,30 @@ mod tests {
         ];
 
         assert_eq!(percentile_millis(&samples, 95.0), Some(40.0));
+    }
+
+    fn write_fastembed_snapshot(root: &Path, profile: EmbeddingProfile) -> std::path::PathBuf {
+        let layout =
+            resolve_fastembed_model_layout(ResolvedEmbeddingProfile::from_profile(profile))
+                .unwrap();
+        let model_root = root.join(&layout.model_cache_dir);
+        let snapshot_root = model_root.join("snapshots").join("test-revision");
+        let model_parent = layout.model_file.parent().unwrap_or_else(|| Path::new(""));
+
+        fs::create_dir_all(snapshot_root.join(model_parent)).unwrap();
+        fs::create_dir_all(model_root.join("refs")).unwrap();
+        fs::write(model_root.join("refs/main"), "test-revision\n").unwrap();
+
+        fs::write(snapshot_root.join(&layout.model_file), "onnx").unwrap();
+        fs::write(snapshot_root.join("tokenizer.json"), "{\"version\":\"1.0\"}").unwrap();
+        fs::write(snapshot_root.join("config.json"), "{\"pad_token_id\":0}").unwrap();
+        fs::write(snapshot_root.join("special_tokens_map.json"), "{}").unwrap();
+        fs::write(
+            snapshot_root.join("tokenizer_config.json"),
+            "{\"model_max_length\":512,\"pad_token\":\"[PAD]\"}",
+        )
+        .unwrap();
+
+        snapshot_root
     }
 }

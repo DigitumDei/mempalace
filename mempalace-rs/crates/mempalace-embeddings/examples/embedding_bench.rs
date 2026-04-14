@@ -28,7 +28,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.allow_downloads = allow_downloads;
 
     let mut provider = FastembedProvider::new(profile, config).try_initialize()?;
-    let benchmark = EmbeddingBenchmark::measure(&mut provider, &request, iterations)?;
+    let benchmark =
+        EmbeddingBenchmark::measure_with_warmup(&mut provider, &request, 3, iterations)?;
 
     if let Some(p95) = benchmark.p95_millis() {
         println!("profile={} p95_ms={p95:.2}", profile.as_str());
