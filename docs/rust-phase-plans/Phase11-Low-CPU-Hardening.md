@@ -57,7 +57,7 @@ Make the Rust implementation usable on a very small always-on VM by enforcing bo
 - [ ] Add low-CPU config tests.
 - [ ] Add bounded concurrency tests.
 - [ ] Add degraded-mode behavior tests.
-- [ ] Measure warm query p95.
+- [ ] Re-check warm query p95 against the Phase 3 subsystem baseline.
 - [ ] Measure idle warm RSS.
 - [ ] Measure single-worker ingest RSS.
 - [ ] Validate results against documented budgets.

@@ -59,7 +59,7 @@ pub const BALANCED_PROFILE: EmbeddingProfileMetadata = EmbeddingProfileMetadata 
 
 pub const LOW_CPU_PROFILE: EmbeddingProfileMetadata = EmbeddingProfileMetadata {
     profile: EmbeddingProfile::LowCpu,
-    model_id: "sentence-transformers/paraphrase-MiniLM-L3-v2",
+    model_id: "Xenova/all-MiniLM-L6-v2",
     dimensions: 384,
 };
 
@@ -75,10 +75,7 @@ mod tests {
             "sentence-transformers/all-MiniLM-L6-v2"
         );
         assert_eq!(BALANCED_PROFILE.dimensions, 384);
-        assert_eq!(
-            EmbeddingProfile::LowCpu.metadata().model_id,
-            "sentence-transformers/paraphrase-MiniLM-L3-v2"
-        );
+        assert_eq!(EmbeddingProfile::LowCpu.metadata().model_id, "Xenova/all-MiniLM-L6-v2");
         assert_eq!(LOW_CPU_PROFILE.dimensions, 384);
     }
 

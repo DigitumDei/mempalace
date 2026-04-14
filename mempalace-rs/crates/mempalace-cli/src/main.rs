@@ -1,8 +1,14 @@
 #![allow(missing_docs)]
 
 use std::env;
+use std::path::PathBuf;
 
 use mempalace_config::ConfigLoader;
+use mempalace_core::EmbeddingProfile;
+use mempalace_embeddings::{
+    EmbeddingProvider, FastembedProvider, FastembedProviderConfig, StartupValidationStatus,
+    log_startup_validation,
+};
 use tracing_subscriber::{EnvFilter, fmt};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,12 +23,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Init => {
             let paths = ConfigLoader::init_default(None)?;
             let config = ConfigLoader::load_with_env(None)?;
+            let cache_root = default_embedding_cache_dir();
+            let provider = FastembedProvider::new(
+                config.embedding_profile,
+                FastembedProviderConfig::new(cache_root),
+            );
+            let validation = provider.startup_validation()?;
+            log_startup_validation(&validation);
 
-            tracing::info!(
-                config_file = %paths.config_file.display(),
-                palace_path = %config.palace_path.display(),
-                embedding_profile = config.embedding_profile.as_str(),
-                "mempalace cli foundation initialized"
+            log_init_outcome(
+                &paths.config_file,
+                &config.palace_path,
+                config.embedding_profile,
+                validation.status,
             );
         }
     }
@@ -71,9 +84,67 @@ fn usage() -> &'static str {
     )
 }
 
+fn default_embedding_cache_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from(".cache"))
+        .join("mempalace")
+        .join("embeddings")
+}
+
+fn log_init_outcome(
+    config_file: &std::path::Path,
+    palace_path: &std::path::Path,
+    embedding_profile: EmbeddingProfile,
+    validation_status: StartupValidationStatus,
+) {
+    match validation_status {
+        StartupValidationStatus::Ready => tracing::info!(
+            config_file = %config_file.display(),
+            palace_path = %palace_path.display(),
+            embedding_profile = embedding_profile.as_str(),
+            "{}",
+            init_outcome_message(validation_status)
+        ),
+        StartupValidationStatus::MissingAssets | StartupValidationStatus::PartialDownload => {
+            tracing::warn!(
+                config_file = %config_file.display(),
+                palace_path = %palace_path.display(),
+                embedding_profile = embedding_profile.as_str(),
+                startup_validation = %validation_status,
+                "{}",
+                init_outcome_message(validation_status)
+            )
+        }
+        StartupValidationStatus::CorruptedCache => tracing::warn!(
+            config_file = %config_file.display(),
+            palace_path = %palace_path.display(),
+            embedding_profile = embedding_profile.as_str(),
+            startup_validation = %validation_status,
+            "{}",
+            init_outcome_message(validation_status)
+        ),
+    }
+}
+
+fn init_outcome_message(validation_status: StartupValidationStatus) -> &'static str {
+    match validation_status {
+        StartupValidationStatus::Ready => "mempalace cli foundation initialized",
+        StartupValidationStatus::MissingAssets | StartupValidationStatus::PartialDownload => {
+            "mempalace cli foundation configured; embedding assets must be downloaded before offline use"
+        }
+        StartupValidationStatus::CorruptedCache => {
+            "mempalace cli foundation configured; embedding cache is corrupted and must be refreshed"
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Command, parse_args, usage};
+    use super::{
+        Command, EmbeddingProfile, StartupValidationStatus, init_outcome_message, log_init_outcome,
+        parse_args, usage,
+    };
+    use std::path::Path;
 
     #[test]
     fn parses_default_invocation_as_init() {
@@ -97,5 +168,38 @@ mod tests {
             parse_args(vec!["status".to_owned()]),
             Err(err) if err.contains("unrecognized arguments")
         ));
+    }
+
+    #[test]
+    fn init_outcome_logging_branches_for_each_validation_state() {
+        for status in [
+            StartupValidationStatus::Ready,
+            StartupValidationStatus::MissingAssets,
+            StartupValidationStatus::PartialDownload,
+            StartupValidationStatus::CorruptedCache,
+        ] {
+            log_init_outcome(
+                Path::new("/tmp/config.toml"),
+                Path::new("/tmp/palace"),
+                EmbeddingProfile::Balanced,
+                status,
+            );
+        }
+    }
+
+    #[test]
+    fn init_outcome_warning_states_use_configured_wording() {
+        assert_eq!(
+            init_outcome_message(StartupValidationStatus::MissingAssets),
+            "mempalace cli foundation configured; embedding assets must be downloaded before offline use"
+        );
+        assert_eq!(
+            init_outcome_message(StartupValidationStatus::PartialDownload),
+            "mempalace cli foundation configured; embedding assets must be downloaded before offline use"
+        );
+        assert_eq!(
+            init_outcome_message(StartupValidationStatus::CorruptedCache),
+            "mempalace cli foundation configured; embedding cache is corrupted and must be refreshed"
+        );
     }
 }

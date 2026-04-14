@@ -489,7 +489,7 @@ Tasks:
 3. Implement the already-pinned `balanced` model:
    - `all-MiniLM-L6-v2`
    - `384` dimensions
-4. Add `low_cpu` profile with a smaller model.
+4. Add `low_cpu` profile with an explicitly pinned low-resource model/runtime preset.
 5. Add config-driven model selection.
 6. Add model cache and startup validation behavior.
 
@@ -506,9 +506,10 @@ Performance gates:
 
 - `balanced` warm query embedding p95: `<= 750 ms` on the reference fixture host
 - `low_cpu` warm query embedding p95: `<= 1500 ms`
-- `low_cpu` end-to-end search p95 on the small-VM fixture: `<= 2500 ms`
-- `low_cpu` resident memory while idle and warm: `<= 450 MB`
-- `low_cpu` resident memory during single-worker ingest: `<= 850 MB`
+- Phase 11 carries the end-to-end and RSS low-CPU gates:
+  - `low_cpu` end-to-end search p95 on the small-VM fixture: `<= 2500 ms`
+  - `low_cpu` resident memory while idle and warm: `<= 450 MB`
+  - `low_cpu` resident memory during single-worker ingest: `<= 850 MB`
 
 Pros vs Python:
 
@@ -519,7 +520,7 @@ Pros vs Python:
 Exit criteria:
 
 - embedding provider suite passes
-- low-CPU benchmark gates recorded
+- warm embedding benchmark baselines recorded
 
 ## Phase 4: Ingest Pipeline
 
