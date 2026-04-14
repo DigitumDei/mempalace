@@ -36,7 +36,7 @@ Make embeddings an explicit, configurable, offline-capable subsystem with clear 
 ### 5. Performance Budget Enforcement
 
 - Build measurement hooks for latency and memory budgets.
-- Capture warm path benchmarks on the reference environment as the subsystem baseline that Phase 11 later uses for low-CPU hardening gates.
+- Capture warm path embedding benchmarks on the reference environment and publish them in CI artifacts as the subsystem baseline that Phase 11 later uses for low-CPU hardening gates.
 
 ## Deliverables
 
@@ -69,15 +69,14 @@ Make embeddings an explicit, configurable, offline-capable subsystem with clear 
 - [ ] Add benchmark harness for embedding latency.
 - [ ] Record `balanced` warm query embedding p95.
 - [ ] Record `low_cpu` warm query embedding p95.
-- [ ] Record `low_cpu` end-to-end search p95 on the small VM fixture.
-- [ ] Record `low_cpu` idle warm RSS.
-- [ ] Record `low_cpu` single-worker ingest RSS.
+- [ ] Publish warm embedding benchmark output for `balanced` and `low_cpu` from the reference CI environment.
+- [ ] Carry `low_cpu` end-to-end search p95, idle warm RSS, and single-worker ingest RSS forward to Phase 11 once end-to-end search and low-resource fixture support exist.
 
 ## Exit Gates
 
 - Embedding provider tests pass.
 - Startup behavior is deterministic and actionable in offline scenarios.
-- Baseline performance numbers are recorded and published for later comparison in Phase 11.
+- Warm embedding baseline numbers are recorded and published for later comparison in Phase 11.
 
 ## Risks To Watch
 

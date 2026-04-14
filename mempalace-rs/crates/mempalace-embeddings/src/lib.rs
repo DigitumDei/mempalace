@@ -394,11 +394,7 @@ fn build_init_options(
 ) -> Result<InitOptions> {
     let model_name = match profile.metadata.profile {
         EmbeddingProfile::Balanced => EmbeddingModel::AllMiniLML6V2,
-        EmbeddingProfile::LowCpu => {
-            return Err(EmbeddingError::UnsupportedFastembedModel {
-                model_id: profile.metadata.model_id.to_owned(),
-            });
-        }
+        EmbeddingProfile::LowCpu => EmbeddingModel::AllMiniLML6V2Q,
     };
 
     Ok(InitOptions {
@@ -507,8 +503,6 @@ pub enum EmbeddingError {
     NotInitialized { model_id: String },
     #[error("offline startup failed for model `{model_id}`: {detail}")]
     OfflineStartup { model_id: String, detail: String },
-    #[error("fastembed does not expose a built-in model for `{model_id}`")]
-    UnsupportedFastembedModel { model_id: String },
     #[error("embedding backend failed for `{model_id}`: {message}")]
     Backend { model_id: String, message: String },
     #[error("embedding cache read failed at {path}: {source}")]
@@ -587,11 +581,22 @@ mod tests {
     #[test]
     fn low_cpu_profile_resolution_is_locked() {
         let resolved = ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::LowCpu);
-        assert_eq!(resolved.metadata.model_id, "sentence-transformers/paraphrase-MiniLM-L3-v2");
+        assert_eq!(resolved.metadata.model_id, "Xenova/all-MiniLM-L6-v2");
         assert_eq!(resolved.metadata.dimensions, 384);
         assert_eq!(resolved.warm_query_p95_budget_ms, 1_500);
         assert_eq!(resolved.low_cpu_idle_rss_budget_mb, Some(700));
         assert_eq!(resolved.low_cpu_ingest_rss_budget_mb, Some(1_200));
+    }
+
+    #[test]
+    fn low_cpu_profile_maps_to_fastembed_quantized_minilm() {
+        let options = build_init_options(
+            ResolvedEmbeddingProfile::from_profile(EmbeddingProfile::LowCpu),
+            &FastembedProviderConfig::new("cache"),
+        )
+        .unwrap();
+
+        assert_eq!(options.model_name, EmbeddingModel::AllMiniLML6V2Q);
     }
 
     #[test]
