@@ -443,20 +443,20 @@ fn resolve_fastembed_model_layout(
         EmbeddingProfile::Balanced => EmbeddingModel::AllMiniLML6V2,
         EmbeddingProfile::LowCpu => EmbeddingModel::AllMiniLML6V2Q,
     };
-    let model_info =
-        TextEmbedding::get_model_info(&model_name).map_err(|source| EmbeddingError::Backend {
-            model_id: profile.metadata.model_id.to_owned(),
-            message: source.to_string(),
+    let (model_cache_dir, model_file) = {
+        let model_info = TextEmbedding::get_model_info(&model_name).map_err(|source| {
+            EmbeddingError::Backend {
+                model_id: profile.metadata.model_id.to_owned(),
+                message: source.to_string(),
+            }
         })?;
+        (
+            PathBuf::from(format!("models--{}", model_info.model_code.replace('/', "--"))),
+            PathBuf::from(&model_info.model_file),
+        )
+    };
 
-    Ok(FastembedModelLayout {
-        model_name,
-        model_cache_dir: PathBuf::from(format!(
-            "models--{}",
-            model_info.model_code.replace('/', "--")
-        )),
-        model_file: PathBuf::from(&model_info.model_file),
-    })
+    Ok(FastembedModelLayout { model_name, model_cache_dir, model_file })
 }
 
 #[derive(Debug, Default)]
