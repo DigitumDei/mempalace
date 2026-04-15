@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -420,6 +420,7 @@ pub async fn ingest_project<P: EmbeddingProvider>(
     let config = ConfigLoader::load_project_config(&root)?;
     let wing_id = wing_id(&config.wing)?;
     let discovered = discover_project_files(&root)?;
+    let routing_fingerprint = project_routing_fingerprint(&config.rooms);
 
     let mut summary = IngestSummary::default();
     summary.discovered_files = discovered.files.len();
@@ -428,17 +429,30 @@ pub async fn ingest_project<P: EmbeddingProvider>(
     for file in discovered.files {
         match read_text_document(&file.absolute_path) {
             Ok(document) => {
-                if document.content.trim().len() < PROJECT_MIN_CHUNK_SIZE {
-                    continue;
-                }
-
                 let source_key =
                     source_key("projects", &root, &config.wing, None, &file.relative_path);
+                let content_hash =
+                    project_ingest_content_hash(&document.content_hash, &routing_fingerprint);
                 if let Some(existing) = engine.operational_store().get_ingested_file(&source_key)? {
-                    if existing.content_hash == document.content_hash {
+                    if existing.content_hash == content_hash {
                         summary.skipped_unchanged += 1;
                         continue;
                     }
+                }
+
+                if document.content.trim().len() < PROJECT_MIN_CHUNK_SIZE {
+                    replace_source_drawers(
+                        engine,
+                        &source_key,
+                        &file.relative_path,
+                        "projects",
+                        content_hash,
+                        Vec::new(),
+                    )
+                    .await?;
+                    summary.ingested_files += 1;
+                    summary.truncated_files += usize::from(document.truncated);
+                    continue;
                 }
 
                 let room = detect_project_room(
@@ -448,12 +462,24 @@ pub async fn ingest_project<P: EmbeddingProvider>(
                 );
                 let chunks = chunk_project_text(&document.content);
                 if chunks.is_empty() {
+                    replace_source_drawers(
+                        engine,
+                        &source_key,
+                        &file.relative_path,
+                        "projects",
+                        content_hash,
+                        Vec::new(),
+                    )
+                    .await?;
+                    summary.ingested_files += 1;
+                    summary.truncated_files += usize::from(document.truncated);
                     continue;
                 }
 
                 let source_drawers = build_drawers(
                     provider,
                     &wing_id,
+                    &source_key,
                     &file.relative_path,
                     "projects",
                     None,
@@ -468,27 +494,20 @@ pub async fn ingest_project<P: EmbeddingProvider>(
                         })
                         .collect::<Vec<_>>(),
                 )?;
+                let drawer_count = source_drawers.len();
 
                 replace_source_drawers(
                     engine,
                     &source_key,
                     &file.relative_path,
                     "projects",
-                    document.content_hash,
+                    content_hash,
                     source_drawers,
                 )
                 .await?;
 
                 summary.ingested_files += 1;
-                summary.drawers_written += engine
-                    .drawer_store()
-                    .list_drawers(&DrawerFilter {
-                        source_file: Some(file.relative_path.clone()),
-                        ..DrawerFilter::default()
-                    })
-                    .await?
-                    .len()
-                    .saturating_sub(1);
+                summary.drawers_written += drawer_count;
                 summary.truncated_files += usize::from(document.truncated);
             }
             Err(IngestError::Io { .. }) => {
@@ -560,6 +579,16 @@ pub async fn ingest_conversations<P: EmbeddingProvider>(
         };
 
         if chunks.is_empty() {
+            replace_source_drawers(
+                engine,
+                &source_key,
+                &file.relative_path,
+                "convos",
+                content_hash,
+                Vec::new(),
+            )
+            .await?;
+            summary.ingested_files += 1;
             continue;
         }
 
@@ -567,6 +596,7 @@ pub async fn ingest_conversations<P: EmbeddingProvider>(
         let drawers = build_drawers(
             provider,
             &wing_id,
+            &source_key,
             &file.relative_path,
             "convos",
             Some(request.extract_mode.as_str()),
@@ -581,6 +611,7 @@ pub async fn ingest_conversations<P: EmbeddingProvider>(
                 })
                 .collect::<Vec<_>>(),
         )?;
+        let drawer_count = drawers.len();
 
         replace_source_drawers(
             engine,
@@ -592,14 +623,7 @@ pub async fn ingest_conversations<P: EmbeddingProvider>(
         )
         .await?;
         summary.ingested_files += 1;
-        summary.drawers_written += engine
-            .drawer_store()
-            .list_drawers(&DrawerFilter {
-                source_file: Some(file.relative_path.clone()),
-                ..DrawerFilter::default()
-            })
-            .await?
-            .len();
+        summary.drawers_written += drawer_count;
     }
 
     Ok(summary)
@@ -608,6 +632,7 @@ pub async fn ingest_conversations<P: EmbeddingProvider>(
 fn build_drawers<P: EmbeddingProvider>(
     provider: &mut P,
     wing: &WingId,
+    source_key: &str,
     source_file: &str,
     ingest_mode: &str,
     extract_mode: Option<&str>,
@@ -627,7 +652,7 @@ fn build_drawers<P: EmbeddingProvider>(
     for (chunk, embedding) in chunks.into_iter().zip(embeddings.vectors().iter()) {
         let room_name = chunk.room_hint.unwrap_or_else(|| "general".to_owned());
         let room_id = room_id(&room_name)?;
-        let drawer_id = drawer_id(wing, &room_id, source_file, chunk.chunk_index)?;
+        let drawer_id = drawer_id(wing, &room_id, source_key, chunk.chunk_index)?;
         drawers.push(DrawerRecord {
             id: drawer_id,
             wing: wing.clone(),
@@ -660,13 +685,7 @@ async fn replace_source_drawers(
     content_hash: String,
     drawers: Vec<DrawerRecord>,
 ) -> Result<()> {
-    let existing = engine
-        .drawer_store()
-        .list_drawers(&DrawerFilter {
-            source_file: Some(source_file.to_owned()),
-            ..DrawerFilter::default()
-        })
-        .await?;
+    let existing = engine.operational_store().committed_drawer_ids_for_source_key(source_key)?;
     let new_ids = drawers.iter().map(|drawer| drawer.id.clone()).collect::<BTreeSet<_>>();
 
     engine
@@ -680,11 +699,7 @@ async fn replace_source_drawers(
         })
         .await?;
 
-    let stale = existing
-        .into_iter()
-        .map(|drawer| drawer.id)
-        .filter(|id| !new_ids.contains(id))
-        .collect::<Vec<_>>();
+    let stale = existing.into_iter().filter(|id| !new_ids.contains(id)).collect::<Vec<_>>();
     if !stale.is_empty() {
         engine.drawer_store().delete_drawers(&stale).await?;
     }
@@ -804,6 +819,8 @@ impl IgnoreMatcher {
         let normalized = relative_path.replace('\\', "/");
         let file_name = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
         let parts = normalized.split('/').collect::<Vec<_>>();
+        let directory_parts =
+            if is_dir { parts.as_slice() } else { &parts[..parts.len().saturating_sub(1)] };
 
         self.rules.iter().any(|rule| match &rule.kind {
             IgnoreRuleKind::Extension(ext) => {
@@ -813,7 +830,7 @@ impl IgnoreMatcher {
                         .next()
                         .is_some_and(|value| value.eq_ignore_ascii_case(ext))
             }
-            IgnoreRuleKind::Directory(dir) => parts.iter().any(|part| part == dir),
+            IgnoreRuleKind::Directory(dir) => directory_parts.iter().any(|part| part == dir),
             IgnoreRuleKind::RelativePrefix(prefix) => {
                 normalized == *prefix || normalized.starts_with(&format!("{prefix}/"))
             }
@@ -854,35 +871,36 @@ fn detect_project_room(relative_path: &Path, content: &str, rooms: &[ProjectRoom
 
     for part in parts.iter().take(parts.len().saturating_sub(1)) {
         for room in rooms {
-            let room_name = room.name.to_ascii_lowercase();
-            if room_name.contains(part) || part.contains(&room_name) {
+            let room_name = canonicalize_label(&room.name);
+            if labels_overlap(&room_name, part) {
                 return canonicalize_label(&room.name);
             }
         }
     }
 
     for room in rooms {
-        let room_name = room.name.to_ascii_lowercase();
-        if room_name.contains(&filename) || filename.contains(&room_name) {
+        let room_name = canonicalize_label(&room.name);
+        if labels_overlap(&room_name, &filename) {
             return canonicalize_label(&room.name);
         }
     }
 
-    let mut scores = HashMap::<String, usize>::new();
+    let mut best_room = None::<String>;
+    let mut best_score = 0usize;
     for room in rooms {
-        let mut score = content_lower.matches(&room.name.to_ascii_lowercase()).count();
+        let mut score = count_term_matches(&content_lower, &room.name.to_ascii_lowercase());
         for keyword in &room.keywords {
-            let keyword_lower = keyword.to_ascii_lowercase();
-            score += content_lower.matches(keyword_lower.as_str()).count();
+            score += count_term_matches(&content_lower, &keyword.to_ascii_lowercase());
         }
-        scores.insert(room.name.clone(), score);
+        if score > best_score {
+            best_score = score;
+            best_room = Some(room.name.clone());
+        }
     }
 
-    scores
-        .into_iter()
-        .max_by_key(|(_, score)| *score)
-        .filter(|(_, score)| *score > 0)
-        .map(|(room, _)| canonicalize_label(&room))
+    best_room
+        .filter(|_| best_score > 0)
+        .map(|room| canonicalize_label(&room))
         .unwrap_or_else(|| "general".to_owned())
 }
 
@@ -1191,7 +1209,11 @@ fn extract_content(value: &Value) -> Option<String> {
                 })
                 .collect::<Vec<_>>();
             let combined = parts.join(" ").trim().to_owned();
-            if combined.is_empty() { None } else { Some(combined) }
+            if combined.is_empty() {
+                None
+            } else {
+                Some(combined)
+            }
         }
         Value::Object(object) => {
             object.get("text").and_then(Value::as_str).map(|text| text.trim().to_owned())
@@ -1338,7 +1360,11 @@ fn should_skip_spellcheck(token: &str) -> bool {
 fn chunk_exchanges(content: &str) -> Vec<Chunk> {
     let lines = content.lines().collect::<Vec<_>>();
     let quote_lines = lines.iter().filter(|line| line.trim_start().starts_with('>')).count();
-    if quote_lines >= 3 { chunk_by_exchange(&lines) } else { chunk_by_paragraph(content) }
+    if quote_lines >= 3 {
+        chunk_by_exchange(&lines)
+    } else {
+        chunk_by_paragraph(content)
+    }
 }
 
 fn chunk_by_exchange(lines: &[&str]) -> Vec<Chunk> {
@@ -1431,7 +1457,10 @@ fn detect_conversation_room(content: &str) -> String {
     TOPIC_KEYWORDS
         .iter()
         .map(|(room, keywords)| {
-            let score = keywords.iter().filter(|keyword| content_lower.contains(**keyword)).count();
+            let score = keywords
+                .iter()
+                .map(|keyword| count_term_matches(&content_lower, keyword))
+                .sum::<usize>();
             ((*room).to_owned(), score)
         })
         .max_by_key(|(_, score)| *score)
@@ -1561,7 +1590,11 @@ fn extract_prose(text: &str) -> String {
         prose.push(line);
     }
     let joined = prose.join("\n").trim().to_owned();
-    if joined.is_empty() { text.to_owned() } else { joined }
+    if joined.is_empty() {
+        text.to_owned()
+    } else {
+        joined
+    }
 }
 
 fn is_code_line(line: &str) -> bool {
@@ -1659,6 +1692,30 @@ fn source_key(
     }
 }
 
+fn project_routing_fingerprint(rooms: &[ProjectRoomConfig]) -> String {
+    let serialized = rooms
+        .iter()
+        .map(|room| {
+            format!(
+                "{}|{}|{}",
+                canonicalize_label(&room.name),
+                canonicalize_optional(room.description.as_deref()),
+                room.keywords
+                    .iter()
+                    .map(|keyword| keyword.to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+    hash_text(&serialized)
+}
+
+fn project_ingest_content_hash(document_hash: &str, routing_fingerprint: &str) -> String {
+    hash_text(&format!("{document_hash}:{routing_fingerprint}"))
+}
+
 fn canonicalize_label(value: &str) -> String {
     value
         .trim()
@@ -1671,6 +1728,10 @@ fn canonicalize_label(value: &str) -> String {
         .collect::<String>()
 }
 
+fn canonicalize_optional(value: Option<&str>) -> String {
+    value.map(canonicalize_label).unwrap_or_default()
+}
+
 fn wing_id(value: &str) -> Result<WingId> {
     WingId::new(canonicalize_label(value)).map_err(|err| IngestError::Core(err.into()))
 }
@@ -1679,15 +1740,44 @@ fn room_id(value: &str) -> Result<RoomId> {
     RoomId::new(canonicalize_label(value)).map_err(|err| IngestError::Core(err.into()))
 }
 
-fn drawer_id(
-    wing: &WingId,
-    room: &RoomId,
-    source_file: &str,
-    chunk_index: u32,
-) -> Result<DrawerId> {
-    let source_hash = &hash_text(source_file)[..12];
+fn drawer_id(wing: &WingId, room: &RoomId, source_key: &str, chunk_index: u32) -> Result<DrawerId> {
+    let source_hash = &hash_text(source_key)[..12];
     DrawerId::new(format!("{}/{}/{}-{:04}", wing.as_str(), room.as_str(), source_hash, chunk_index))
         .map_err(|err| IngestError::Core(err.into()))
+}
+
+fn labels_overlap(room_name: &str, candidate: &str) -> bool {
+    let candidate = canonicalize_label(candidate);
+    if candidate.len() < 2 {
+        return false;
+    }
+    room_name == candidate || room_name.split(['-', '_', '.', '/']).any(|part| part == candidate)
+}
+
+fn count_term_matches(haystack: &str, needle: &str) -> usize {
+    if needle.trim().is_empty() {
+        return 0;
+    }
+
+    let mut matches = 0usize;
+    let mut search_start = 0usize;
+    while let Some(found) = haystack[search_start..].find(needle) {
+        let start = search_start + found;
+        let end = start + needle.len();
+        let left_ok =
+            start == 0 || !haystack[..start].chars().next_back().is_some_and(is_word_char);
+        let right_ok =
+            end == haystack.len() || !haystack[end..].chars().next().is_some_and(is_word_char);
+        if left_ok && right_ok {
+            matches += 1;
+        }
+        search_start = end;
+    }
+    matches
+}
+
+fn is_word_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-')
 }
 
 #[cfg(test)]
@@ -1835,6 +1925,14 @@ mod tests {
         assert!(discovered.ignored_files >= 2);
     }
 
+    #[test]
+    fn does_not_treat_file_named_like_directory_as_ignored_directory() {
+        let tempdir = tempdir().unwrap();
+        let matcher = IgnoreMatcher::load(tempdir.path()).unwrap();
+        assert!(!matcher.matches("node_modules", false));
+        assert!(matcher.matches("node_modules", true));
+    }
+
     #[tokio::test]
     async fn ingests_project_fixture_and_routes_rooms() {
         let tempdir = tempdir().unwrap();
@@ -1874,7 +1972,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ingests_conversation_fixture_in_both_modes() {
+    async fn ingests_conversation_fixture_in_both_modes_in_same_wing() {
         let tempdir = tempdir().unwrap();
         let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/fixtures/phase0/inputs/convos");
@@ -1901,7 +1999,7 @@ mod tests {
             &mut provider,
             &ConversationIngestRequest {
                 convo_dir: fixture_root,
-                wing: Some("phase0_convos_general".to_owned()),
+                wing: Some("phase0_convos".to_owned()),
                 agent: "tester".to_owned(),
                 extract_mode: ConversationExtractMode::General,
             },
@@ -1912,13 +2010,94 @@ mod tests {
         let decisions = engine
             .drawer_store()
             .list_drawers(&DrawerFilter {
-                wing: Some(WingId::new("phase0_convos_general").unwrap()),
+                wing: Some(WingId::new("phase0_convos").unwrap()),
                 room: Some(RoomId::new("decision").unwrap()),
                 ..DrawerFilter::default()
             })
             .await
             .unwrap();
+        let exchange = engine
+            .drawer_store()
+            .list_drawers(&DrawerFilter {
+                wing: Some(WingId::new("phase0_convos").unwrap()),
+                source_file: Some("product_strategy.txt".to_owned()),
+                ..DrawerFilter::default()
+            })
+            .await
+            .unwrap();
         assert!(!decisions.is_empty());
+        assert!(!exchange.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rerun_does_not_delete_same_relative_conversation_in_other_wing() {
+        let tempdir = tempdir().unwrap();
+        let wing_a = tempdir.path().join("wing-a");
+        let wing_b = tempdir.path().join("wing-b");
+        fs::create_dir_all(&wing_a).unwrap();
+        fs::create_dir_all(&wing_b).unwrap();
+        let transcript =
+            "> Why?\nBecause context matters.\n\n> What changed?\nWe fixed ingest state.\n";
+        fs::write(wing_a.join("chat.txt"), transcript).unwrap();
+        fs::write(wing_b.join("chat.txt"), transcript).unwrap();
+
+        let engine = open_engine(tempdir.path()).await;
+        let mut provider =
+            FakeEmbeddingProvider::new(EmbeddingProfile::Balanced.metadata().dimensions);
+
+        ingest_conversations(
+            &engine,
+            &mut provider,
+            &ConversationIngestRequest {
+                convo_dir: wing_a.clone(),
+                wing: Some("wing_a".to_owned()),
+                agent: "tester".to_owned(),
+                extract_mode: ConversationExtractMode::Exchange,
+            },
+        )
+        .await
+        .unwrap();
+        ingest_conversations(
+            &engine,
+            &mut provider,
+            &ConversationIngestRequest {
+                convo_dir: wing_b.clone(),
+                wing: Some("wing_b".to_owned()),
+                agent: "tester".to_owned(),
+                extract_mode: ConversationExtractMode::Exchange,
+            },
+        )
+        .await
+        .unwrap();
+
+        fs::write(
+            wing_a.join("chat.txt"),
+            "> Why?\nBecause scoped keys matter.\n\n> What changed?\nWe fixed cross-wing cleanup.\n",
+        )
+        .unwrap();
+        ingest_conversations(
+            &engine,
+            &mut provider,
+            &ConversationIngestRequest {
+                convo_dir: wing_a,
+                wing: Some("wing_a".to_owned()),
+                agent: "tester".to_owned(),
+                extract_mode: ConversationExtractMode::Exchange,
+            },
+        )
+        .await
+        .unwrap();
+
+        let wing_b_drawers = engine
+            .drawer_store()
+            .list_drawers(&DrawerFilter {
+                wing: Some(WingId::new("wing_b").unwrap()),
+                source_file: Some("chat.txt".to_owned()),
+                ..DrawerFilter::default()
+            })
+            .await
+            .unwrap();
+        assert!(!wing_b_drawers.is_empty());
     }
 
     #[tokio::test]
@@ -1955,7 +2134,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(first.drawers_written > 0);
+        assert_eq!(first.drawers_written, 2);
         assert_eq!(second.skipped_unchanged, 1);
 
         fs::write(
@@ -1981,6 +2160,110 @@ mod tests {
             .unwrap();
         assert_eq!(drawers.len(), 1);
         assert!(drawers[0].content.contains("changed auth"));
+    }
+
+    #[tokio::test]
+    async fn removes_orphaned_drawers_when_project_file_becomes_too_small() {
+        let tempdir = tempdir().unwrap();
+        let project_dir = tempdir.path().join("project");
+        fs::create_dir_all(project_dir.join("backend")).unwrap();
+        fs::write(
+            project_dir.join("mempalace.yaml"),
+            "wing: sample\nrooms:\n  - name: backend\n    keywords: [auth]\n",
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("backend/auth.py"),
+            "def login():\n    return 'auth token'\n".repeat(40),
+        )
+        .unwrap();
+
+        let engine = open_engine(&tempdir.path().join("palace")).await;
+        let mut provider =
+            FakeEmbeddingProvider::new(EmbeddingProfile::Balanced.metadata().dimensions);
+
+        let first = ingest_project(
+            &engine,
+            &mut provider,
+            &ProjectIngestRequest { project_dir: project_dir.clone(), agent: "tester".to_owned() },
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.drawers_written, 2);
+
+        fs::write(project_dir.join("backend/auth.py"), "tiny").unwrap();
+        let second = ingest_project(
+            &engine,
+            &mut provider,
+            &ProjectIngestRequest { project_dir: project_dir.clone(), agent: "tester".to_owned() },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(second.ingested_files, 1);
+        let drawers = engine
+            .drawer_store()
+            .list_drawers(&DrawerFilter {
+                source_file: Some("backend/auth.py".to_owned()),
+                ..DrawerFilter::default()
+            })
+            .await
+            .unwrap();
+        assert!(drawers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn project_config_changes_trigger_reroute_without_file_edits() {
+        let tempdir = tempdir().unwrap();
+        let project_dir = tempdir.path().join("project");
+        fs::create_dir_all(project_dir.join("notes")).unwrap();
+        fs::write(
+            project_dir.join("mempalace.yaml"),
+            "wing: sample\nrooms:\n  - name: backend\n    keywords: [token]\n  - name: general\n",
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("notes/plan.md"),
+            "Token handling and API auth strategy.\n".repeat(20),
+        )
+        .unwrap();
+
+        let engine = open_engine(&tempdir.path().join("palace")).await;
+        let mut provider =
+            FakeEmbeddingProvider::new(EmbeddingProfile::Balanced.metadata().dimensions);
+
+        ingest_project(
+            &engine,
+            &mut provider,
+            &ProjectIngestRequest { project_dir: project_dir.clone(), agent: "tester".to_owned() },
+        )
+        .await
+        .unwrap();
+
+        fs::write(
+            project_dir.join("mempalace.yaml"),
+            "wing: sample\nrooms:\n  - name: planning\n    keywords: [token, strategy]\n  - name: general\n",
+        )
+        .unwrap();
+        let rerun = ingest_project(
+            &engine,
+            &mut provider,
+            &ProjectIngestRequest { project_dir: project_dir.clone(), agent: "tester".to_owned() },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(rerun.ingested_files, 1);
+        let planning = engine
+            .drawer_store()
+            .list_drawers(&DrawerFilter {
+                room: Some(RoomId::new("planning").unwrap()),
+                source_file: Some("notes/plan.md".to_owned()),
+                ..DrawerFilter::default()
+            })
+            .await
+            .unwrap();
+        assert!(!planning.is_empty());
     }
 
     #[tokio::test]
