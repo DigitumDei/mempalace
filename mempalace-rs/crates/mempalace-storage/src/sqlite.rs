@@ -1,18 +1,19 @@
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use time::OffsetDateTime;
 
 use crate::error::{Result, StorageError};
 use crate::types::{
-    ConfigEntry, EntityRecord, GraphDocument, IngestManifestEntry, IngestRun, IngestRunStatus,
-    RetryableRun, ToolStateEntry,
+    ConfigEntry, EntityRecord, GraphDocument, IngestFileRecord, IngestManifestEntry, IngestRun,
+    IngestRunStatus, RetryableRun, ToolStateEntry,
 };
 use mempalace_core::DrawerId;
 
-const MIGRATIONS: &[(&str, &str)] = &[(
-    "0001_initial_storage",
-    r#"
+const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0001_initial_storage",
+        r#"
 CREATE TABLE IF NOT EXISTS migrations (
     version TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS ingest_manifests (
 );
 
 CREATE TABLE IF NOT EXISTS ingest_files (
-    source_file TEXT PRIMARY KEY,
+    source_key TEXT PRIMARY KEY,
+    source_file TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     last_ingested_at TEXT NOT NULL,
     ingest_kind TEXT NOT NULL,
@@ -71,7 +73,29 @@ CREATE TABLE IF NOT EXISTS tool_state (
     updated_at TEXT NOT NULL
 );
     "#,
-)];
+    ),
+    (
+        "0002_ingest_files_source_key",
+        r#"
+ALTER TABLE ingest_files RENAME TO ingest_files_old;
+
+CREATE TABLE ingest_files (
+    source_key TEXT PRIMARY KEY,
+    source_file TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    last_ingested_at TEXT NOT NULL,
+    ingest_kind TEXT NOT NULL,
+    drawer_count INTEGER NOT NULL
+);
+
+INSERT INTO ingest_files (source_key, source_file, content_hash, last_ingested_at, ingest_kind, drawer_count)
+SELECT ingest_kind || ':' || source_file, source_file, content_hash, last_ingested_at, ingest_kind, drawer_count
+FROM ingest_files_old;
+
+DROP TABLE ingest_files_old;
+        "#,
+    ),
+];
 
 pub trait IngestManifestStore {
     fn ensure_schema(&self) -> Result<()>;
@@ -85,6 +109,7 @@ pub trait IngestManifestStore {
     fn mark_run_committed(
         &self,
         run_id: i64,
+        source_key: &str,
         source_file: &str,
         content_hash: &str,
         drawer_count: usize,
@@ -93,6 +118,8 @@ pub trait IngestManifestStore {
     fn stale_pending_runs(&self, older_than: OffsetDateTime) -> Result<Vec<RetryableRun>>;
     fn mark_run_failed(&self, run_id: i64, reason: &str, failed_at: OffsetDateTime) -> Result<()>;
     fn committed_drawer_ids(&self) -> Result<Vec<DrawerId>>;
+    fn committed_drawer_ids_for_source_key(&self, source_key: &str) -> Result<Vec<DrawerId>>;
+    fn get_ingested_file(&self, source_key: &str) -> Result<Option<IngestFileRecord>>;
 }
 
 pub trait EntityRegistryStore {
@@ -123,7 +150,7 @@ impl SqliteOperationalStore {
     }
 
     pub fn migration_names() -> &'static [&'static str] {
-        &["0001_initial_storage"]
+        &["0001_initial_storage", "0002_ingest_files_source_key"]
     }
 
     pub fn path(&self) -> &Path {
@@ -234,6 +261,7 @@ impl IngestManifestStore for SqliteOperationalStore {
     fn mark_run_committed(
         &self,
         run_id: i64,
+        source_key: &str,
         source_file: &str,
         content_hash: &str,
         drawer_count: usize,
@@ -259,14 +287,22 @@ impl IngestManifestStore for SqliteOperationalStore {
         )?;
 
         transaction.execute(
-            "INSERT INTO ingest_files (source_file, content_hash, last_ingested_at, ingest_kind, drawer_count)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(source_file) DO UPDATE SET
+            "INSERT INTO ingest_files (source_key, source_file, content_hash, last_ingested_at, ingest_kind, drawer_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(source_key) DO UPDATE SET
+                 source_file = excluded.source_file,
                  content_hash = excluded.content_hash,
                  last_ingested_at = excluded.last_ingested_at,
                  ingest_kind = excluded.ingest_kind,
                  drawer_count = excluded.drawer_count",
-            params![source_file, content_hash, timestamp, ingest_kind, drawer_count as i64],
+            params![
+                source_key,
+                source_file,
+                content_hash,
+                timestamp,
+                ingest_kind,
+                drawer_count as i64
+            ],
         )?;
 
         transaction.commit()?;
@@ -374,6 +410,51 @@ impl IngestManifestStore for SqliteOperationalStore {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(StorageError::from)
+    }
+
+    fn committed_drawer_ids_for_source_key(&self, source_key: &str) -> Result<Vec<DrawerId>> {
+        let connection = self.open_connection()?;
+        let mut statement = connection.prepare(
+            "SELECT manifest.drawer_id
+             FROM ingest_manifests AS manifest
+             INNER JOIN ingest_runs AS runs ON runs.id = manifest.run_id
+             WHERE runs.source_key = ?1 AND runs.status = ?2 AND manifest.status = ?2
+               AND runs.id = (
+                   SELECT id
+                   FROM ingest_runs
+                   WHERE source_key = ?1 AND status = ?2
+                   ORDER BY id DESC
+                   LIMIT 1
+               )
+             ORDER BY manifest.drawer_id ASC",
+        )?;
+        statement
+            .query_map(params![source_key, IngestRunStatus::Committed.as_str()], |row| {
+                let raw: String = row.get(0)?;
+                DrawerId::new(raw).map_err(|err| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(err),
+                    )
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
+    }
+
+    fn get_ingested_file(&self, source_key: &str) -> Result<Option<IngestFileRecord>> {
+        let connection = self.open_connection()?;
+        let exact = query_ingested_file(&connection, source_key)?;
+        if exact.is_some() {
+            return Ok(exact);
+        }
+
+        if let Some(legacy_key) = legacy_source_key(source_key) {
+            return query_ingested_file(&connection, &legacy_key);
+        }
+
+        Ok(None)
     }
 }
 
@@ -560,6 +641,63 @@ fn parse_status(raw: String) -> rusqlite::Result<IngestRunStatus> {
     }
 }
 
+fn query_ingested_file(
+    connection: &Connection,
+    source_key: &str,
+) -> Result<Option<IngestFileRecord>> {
+    connection
+        .query_row(
+            "SELECT source_key, source_file, content_hash, last_ingested_at, ingest_kind, drawer_count
+             FROM ingest_files
+             WHERE source_key = ?1",
+            [source_key],
+            |row| {
+                let drawer_count: i64 = row.get(5)?;
+                Ok(IngestFileRecord {
+                    source_key: row.get(0)?,
+                    source_file: row.get(1)?,
+                    content_hash: row.get(2)?,
+                    last_ingested_at: decode_time(row.get(3)?).map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(err),
+                        )
+                    })?,
+                    ingest_kind: row.get(4)?,
+                    drawer_count: usize::try_from(drawer_count).map_err(|_| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Integer,
+                            Box::new(StorageError::Invariant(format!(
+                                "invalid drawer_count `{drawer_count}`"
+                            ))),
+                        )
+                    })?,
+                })
+            },
+        )
+        .optional()
+        .map_err(StorageError::from)
+}
+
+fn legacy_source_key(source_key: &str) -> Option<String> {
+    let (ingest_kind, remainder) = source_key.split_once(':')?;
+    let required_delimiters = match ingest_kind {
+        "projects" => 2,
+        "convos" => 3,
+        _ => return None,
+    };
+
+    let mut relative_path = remainder;
+    for _ in 0..required_delimiters {
+        let (_, tail) = relative_path.split_once(':')?;
+        relative_path = tail;
+    }
+
+    Some(format!("{ingest_kind}:{relative_path}"))
+}
+
 fn encode_time(value: OffsetDateTime) -> String {
     value
         .format(&time::format_description::well_known::Rfc3339)
@@ -578,8 +716,8 @@ mod tests {
     use time::macros::datetime;
 
     use super::{
-        EntityRegistryStore, GraphStore, IngestManifestStore, MIGRATIONS, SqliteOperationalStore,
-        ToolStateStore,
+        EntityRegistryStore, GraphStore, IngestManifestStore, SqliteOperationalStore,
+        ToolStateStore, MIGRATIONS,
     };
     use crate::types::{
         ConfigEntry, EntityRecord, GraphDocument, IngestManifestEntry, IngestRunStatus,
@@ -709,5 +847,171 @@ mod tests {
             store.get_graph_document("palace").unwrap().unwrap().payload,
             json!({ "rooms": ["backend"] })
         );
+    }
+
+    #[test]
+    fn tracks_ingested_files_by_source_key() {
+        let tempdir = tempdir().unwrap();
+        let store = SqliteOperationalStore::new(tempdir.path().join("storage.sqlite3"));
+        store.ensure_schema().unwrap();
+
+        let run_a = store
+            .create_pending_run(
+                "convos",
+                "convos:wing-a:exchange:root:file.txt",
+                &[IngestManifestEntry {
+                    run_id: 0,
+                    drawer_id: DrawerId::new("wing-a/decision/0001").unwrap(),
+                    source_file: "file.txt".to_owned(),
+                    content_hash: "hash-a".to_owned(),
+                    status: IngestRunStatus::Pending,
+                }],
+                datetime!(2026-04-11 12:00:00 UTC),
+            )
+            .unwrap();
+        store
+            .mark_run_committed(
+                run_a.id,
+                "convos:wing-a:exchange:root:file.txt",
+                "file.txt",
+                "hash-a",
+                1,
+                datetime!(2026-04-11 12:01:00 UTC),
+            )
+            .unwrap();
+
+        let run_b = store
+            .create_pending_run(
+                "convos",
+                "convos:wing-a:general:root:file.txt",
+                &[IngestManifestEntry {
+                    run_id: 0,
+                    drawer_id: DrawerId::new("wing-a/milestone/0001").unwrap(),
+                    source_file: "file.txt".to_owned(),
+                    content_hash: "hash-b".to_owned(),
+                    status: IngestRunStatus::Pending,
+                }],
+                datetime!(2026-04-11 12:02:00 UTC),
+            )
+            .unwrap();
+        store
+            .mark_run_committed(
+                run_b.id,
+                "convos:wing-a:general:root:file.txt",
+                "file.txt",
+                "hash-b",
+                1,
+                datetime!(2026-04-11 12:03:00 UTC),
+            )
+            .unwrap();
+
+        let exchange =
+            store.get_ingested_file("convos:wing-a:exchange:root:file.txt").unwrap().unwrap();
+        let general =
+            store.get_ingested_file("convos:wing-a:general:root:file.txt").unwrap().unwrap();
+
+        assert_eq!(exchange.content_hash, "hash-a");
+        assert_eq!(general.content_hash, "hash-b");
+    }
+
+    #[test]
+    fn lists_committed_drawer_ids_for_exact_source_key() {
+        let tempdir = tempdir().unwrap();
+        let store = SqliteOperationalStore::new(tempdir.path().join("storage.sqlite3"));
+        store.ensure_schema().unwrap();
+
+        let run_a = store
+            .create_pending_run(
+                "convos",
+                "convos:wing-a:exchange:root-a:file.txt",
+                &[IngestManifestEntry {
+                    run_id: 0,
+                    drawer_id: DrawerId::new("wing-a/general/a-0000").unwrap(),
+                    source_file: "file.txt".to_owned(),
+                    content_hash: "hash-a".to_owned(),
+                    status: IngestRunStatus::Pending,
+                }],
+                datetime!(2026-04-11 12:00:00 UTC),
+            )
+            .unwrap();
+        store
+            .mark_run_committed(
+                run_a.id,
+                "convos:wing-a:exchange:root-a:file.txt",
+                "file.txt",
+                "hash-a",
+                1,
+                datetime!(2026-04-11 12:01:00 UTC),
+            )
+            .unwrap();
+
+        let run_b = store
+            .create_pending_run(
+                "convos",
+                "convos:wing-a:exchange:root-b:file.txt",
+                &[IngestManifestEntry {
+                    run_id: 0,
+                    drawer_id: DrawerId::new("wing-a/general/b-0000").unwrap(),
+                    source_file: "file.txt".to_owned(),
+                    content_hash: "hash-b".to_owned(),
+                    status: IngestRunStatus::Pending,
+                }],
+                datetime!(2026-04-11 12:02:00 UTC),
+            )
+            .unwrap();
+        store
+            .mark_run_committed(
+                run_b.id,
+                "convos:wing-a:exchange:root-b:file.txt",
+                "file.txt",
+                "hash-b",
+                1,
+                datetime!(2026-04-11 12:03:00 UTC),
+            )
+            .unwrap();
+
+        let root_a = store
+            .committed_drawer_ids_for_source_key("convos:wing-a:exchange:root-a:file.txt")
+            .unwrap();
+        let root_b = store
+            .committed_drawer_ids_for_source_key("convos:wing-a:exchange:root-b:file.txt")
+            .unwrap();
+
+        assert_eq!(root_a, vec![DrawerId::new("wing-a/general/a-0000").unwrap()]);
+        assert_eq!(root_b, vec![DrawerId::new("wing-a/general/b-0000").unwrap()]);
+    }
+
+    #[test]
+    fn reads_legacy_migrated_ingest_rows_via_scoped_lookup() {
+        let tempdir = tempdir().unwrap();
+        let store = SqliteOperationalStore::new(tempdir.path().join("storage.sqlite3"));
+        let connection = rusqlite::Connection::open(store.path()).unwrap();
+        connection
+            .execute_batch(
+                r#"
+CREATE TABLE ingest_files (
+    source_file TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    last_ingested_at TEXT NOT NULL,
+    ingest_kind TEXT NOT NULL,
+    drawer_count INTEGER NOT NULL
+);
+INSERT INTO ingest_files (source_file, content_hash, last_ingested_at, ingest_kind, drawer_count)
+VALUES ('chat/file.txt', 'legacy-hash', '2026-04-11T12:00:00Z', 'convos', 2);
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+
+        store.ensure_schema().unwrap();
+
+        let migrated = store
+            .get_ingested_file("convos:wing-a:exchange:root123:chat/file.txt")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(migrated.source_key, "convos:chat/file.txt");
+        assert_eq!(migrated.content_hash, "legacy-hash");
+        assert_eq!(migrated.drawer_count, 2);
     }
 }

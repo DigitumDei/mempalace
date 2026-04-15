@@ -89,6 +89,16 @@ pub struct IngestManifestEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngestFileRecord {
+    pub source_key: String,
+    pub source_file: String,
+    pub content_hash: String,
+    pub last_ingested_at: OffsetDateTime,
+    pub ingest_kind: String,
+    pub drawer_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetryableRun {
     pub run: IngestRun,
     pub chunk_ids: Vec<DrawerId>,

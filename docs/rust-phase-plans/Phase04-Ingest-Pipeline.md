@@ -58,30 +58,30 @@ Port project mining, conversation mining, normalization, extraction, and increme
 
 ## To-Do Checklist
 
-- [ ] Implement filesystem traversal.
-- [ ] Implement ignore file and ignore-rule handling.
-- [ ] Define skipped versus failed file behavior.
-- [ ] Port project chunking logic.
-- [ ] Port large-file cutoff and truncation policy.
-- [ ] Port conversation export parsing.
-- [ ] Normalize timestamps, speakers, and message boundaries.
-- [ ] Implement malformed export handling.
-- [ ] Port normalization functions.
-- [ ] Port spellcheck-related normalization behavior.
-- [ ] Port general extraction mode.
-- [ ] Define deterministic chunk id generation.
-- [ ] Implement file hashing.
-- [ ] Implement changed-file reindex decisions.
-- [ ] Implement idempotent rerun behavior.
-- [ ] Write records through manifest and drawer stores.
-- [ ] Add project fixture ingest tests.
-- [ ] Add conversation fixture ingest tests.
-- [ ] Add normalization golden tests.
-- [ ] Add spellcheck-mutation normalization tests.
-- [ ] Add extraction golden tests.
-- [ ] Add reindex idempotency tests.
-- [ ] Add malformed export tests.
-- [ ] Add ignored-file behavior tests.
+- [x] Implement filesystem traversal.
+- [x] Implement ignore file and ignore-rule handling.
+- [x] Define skipped versus failed file behavior.
+- [x] Port project chunking logic.
+- [x] Port large-file cutoff and truncation policy.
+- [x] Port conversation export parsing.
+- [x] Normalize timestamps, speakers, and message boundaries.
+- [x] Implement malformed export handling.
+- [x] Port normalization functions.
+- [x] Port spellcheck-related normalization behavior.
+- [x] Port general extraction mode.
+- [x] Define deterministic chunk id generation.
+- [x] Implement file hashing.
+- [x] Implement changed-file reindex decisions.
+- [x] Implement idempotent rerun behavior.
+- [x] Write records through manifest and drawer stores.
+- [x] Add project fixture ingest tests.
+- [x] Add conversation fixture ingest tests.
+- [x] Add normalization golden tests.
+- [x] Add spellcheck-mutation normalization tests.
+- [x] Add extraction golden tests.
+- [x] Add reindex idempotency tests.
+- [x] Add malformed export tests.
+- [x] Add ignored-file behavior tests.
 
 ## Exit Gates
 

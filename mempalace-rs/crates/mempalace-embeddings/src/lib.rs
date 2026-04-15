@@ -69,6 +69,16 @@ pub struct EmbeddingResponse {
 }
 
 impl EmbeddingResponse {
+    /// Builds a response from provider output after validating dimensions.
+    pub fn from_vectors(
+        vectors: Vec<Vec<f32>>,
+        dimensions: usize,
+        profile: EmbeddingProfile,
+        model_id: &'static str,
+    ) -> Result<Self> {
+        Self::new(vectors, dimensions, profile, model_id)
+    }
+
     fn new(
         vectors: Vec<Vec<f32>>,
         dimensions: usize,

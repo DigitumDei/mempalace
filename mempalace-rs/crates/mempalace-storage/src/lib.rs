@@ -14,8 +14,8 @@ pub use sqlite::{
 };
 pub use types::{
     ConfigEntry, DrawerFilter, DrawerMatch, DrawerStore, DuplicateStrategy, EntityRecord,
-    GraphDocument, IngestCommitRequest, IngestManifestEntry, IngestRun, IngestRunStatus,
-    RetryableRun, SearchRequest, StorageLayout, ToolStateEntry,
+    GraphDocument, IngestCommitRequest, IngestFileRecord, IngestManifestEntry, IngestRun,
+    IngestRunStatus, RetryableRun, SearchRequest, StorageLayout, ToolStateEntry,
 };
 
 pub use mempalace_core as core;
