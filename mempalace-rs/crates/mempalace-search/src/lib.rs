@@ -19,6 +19,7 @@ const DEFAULT_LAYER1_MAX_DRAWERS: usize = 15;
 const DEFAULT_LAYER1_MAX_CHARS: usize = 3_200;
 const LAYER1_SNIPPET_LIMIT: usize = 200;
 const LAYER2_SNIPPET_LIMIT: usize = 300;
+const SEARCH_OVERFETCH_MARGIN: usize = 32;
 
 pub type Result<T> = std::result::Result<T, SearchError>;
 
@@ -160,15 +161,12 @@ where
             room: query.room.clone(),
             ..DrawerFilter::default()
         };
-        let candidate_count = store.list_drawers(&filter).await?.len();
-        if candidate_count == 0 {
-            return Ok(Vec::new());
-        }
+        let search_limit = query.limit.saturating_add(SEARCH_OVERFETCH_MARGIN);
 
         let matches = store
             .search_drawers(&SearchRequest {
                 embedding: query_embedding,
-                limit: candidate_count,
+                limit: search_limit,
                 filter,
             })
             .await?;
@@ -364,6 +362,7 @@ where
             let next_total =
                 total_chars + if room_has_entries { 0 } else { room_chars } + entry_chars;
             if next_total > config.max_chars {
+                lines.extend(room_lines);
                 lines.push("  ... (more in L3 search)".to_owned());
                 return Ok(lines.join("\n"));
             }
@@ -521,7 +520,7 @@ mod tests {
     use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::{LazyLock, Mutex, MutexGuard};
+    use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
     use std::time::{SystemTime, UNIX_EPOCH};
     use time::macros::{date, datetime};
 
@@ -704,6 +703,68 @@ mod tests {
                     datetime!(2026-04-10 07:00:00 UTC),
                 ),
             ],
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct SearchSpyStore {
+        drawers: Vec<DrawerRecord>,
+        list_calls: Arc<Mutex<usize>>,
+        search_limits: Arc<Mutex<Vec<usize>>>,
+    }
+
+    #[async_trait]
+    impl DrawerStore for SearchSpyStore {
+        async fn ensure_schema(&self) -> Result<(), StorageError> {
+            Ok(())
+        }
+
+        async fn put_drawers(
+            &self,
+            _drawers: &[DrawerRecord],
+            _strategy: DuplicateStrategy,
+        ) -> Result<(), StorageError> {
+            unreachable!("not used in phase 5 tests")
+        }
+
+        async fn get_drawer(&self, _id: &DrawerId) -> Result<Option<DrawerRecord>, StorageError> {
+            unreachable!("not used in phase 5 tests")
+        }
+
+        async fn delete_drawers(&self, _ids: &[DrawerId]) -> Result<usize, StorageError> {
+            unreachable!("not used in phase 5 tests")
+        }
+
+        async fn search_drawers(
+            &self,
+            request: &SearchRequest,
+        ) -> Result<Vec<DrawerMatch>, StorageError> {
+            self.search_limits.lock().unwrap().push(request.limit);
+
+            let mut filtered = self
+                .drawers
+                .iter()
+                .filter(|drawer| filter_matches(drawer, &request.filter))
+                .cloned()
+                .map(|drawer| DrawerMatch {
+                    distance: Some((drawer.embedding[0] - request.embedding[0]).abs()),
+                    record: drawer,
+                })
+                .collect::<Vec<_>>();
+
+            filtered.sort_by(|left, right| {
+                left.distance.partial_cmp(&right.distance).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            filtered.truncate(request.limit);
+            Ok(filtered)
+        }
+
+        async fn list_drawers(
+            &self,
+            _filter: &DrawerFilter,
+        ) -> Result<Vec<DrawerRecord>, StorageError> {
+            *self.list_calls.lock().unwrap() += 1;
+            Ok(self.drawers.clone())
         }
     }
 
@@ -908,6 +969,55 @@ mod tests {
         let results = runtime.search(&store, &query).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].wing.as_str(), "wing_a");
+    }
+
+    #[tokio::test]
+    async fn search_uses_bounded_vector_overfetch_without_listing_drawers() {
+        let list_calls = Arc::new(Mutex::new(0usize));
+        let search_limits = Arc::new(Mutex::new(Vec::new()));
+        let store = SearchSpyStore {
+            drawers: vec![
+                record(
+                    "wing_b/general/0001",
+                    "wing_b",
+                    "general",
+                    "zeta.txt",
+                    "B",
+                    Some(0.5),
+                    datetime!(2026-04-11 09:00:00 UTC),
+                ),
+                record(
+                    "wing_a/general/0001",
+                    "wing_a",
+                    "general",
+                    "alpha.txt",
+                    "A",
+                    Some(0.5),
+                    datetime!(2026-04-11 09:00:00 UTC),
+                ),
+            ],
+            list_calls: Arc::clone(&list_calls),
+            search_limits: Arc::clone(&search_limits),
+        };
+        let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+
+        let results = runtime
+            .search(
+                &store,
+                &SearchQuery {
+                    text: "tie".to_owned(),
+                    wing: None,
+                    room: None,
+                    limit: 1,
+                    profile: EmbeddingProfile::Balanced,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results[0].wing.as_str(), "wing_a");
+        assert_eq!(*list_calls.lock().unwrap(), 0);
+        assert_eq!(search_limits.lock().unwrap().as_slice(), &[1 + super::SEARCH_OVERFETCH_MARGIN]);
     }
 
     #[tokio::test]
@@ -1278,6 +1388,44 @@ mod tests {
 
         assert!(rendered.contains("[alpha]"));
         assert!(!rendered.contains("[beta]"));
+        assert!(rendered.contains("... (more in L3 search)"));
+    }
+
+    #[tokio::test]
+    async fn generate_layer1_keeps_buffered_room_entries_when_truncating_mid_room() {
+        let store = StubStore {
+            drawers: vec![
+                record(
+                    "wing_team/alpha/0001",
+                    "wing_team",
+                    "alpha",
+                    "fixtures/alpha-1.txt",
+                    "first alpha entry",
+                    Some(0.9),
+                    datetime!(2026-04-11 09:00:00 UTC),
+                ),
+                record(
+                    "wing_team/alpha/0002",
+                    "wing_team",
+                    "alpha",
+                    "fixtures/alpha-2.txt",
+                    "second alpha entry that should overflow the layer one budget",
+                    Some(0.8),
+                    datetime!(2026-04-11 08:00:00 UTC),
+                ),
+            ],
+        };
+        let max_chars = super::char_count("## L1 — ESSENTIAL STORY")
+            + super::char_count("\n[alpha]")
+            + super::char_count("  - first alpha entry  (alpha-1.txt)");
+
+        let rendered = generate_layer1(&store, None, Layer1Config { max_drawers: 2, max_chars })
+            .await
+            .unwrap();
+
+        assert!(rendered.contains("[alpha]"));
+        assert!(rendered.contains("first alpha entry  (alpha-1.txt)"));
+        assert!(!rendered.contains("second alpha entry"));
         assert!(rendered.contains("... (more in L3 search)"));
     }
 }
