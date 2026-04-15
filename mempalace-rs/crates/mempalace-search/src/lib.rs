@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
 use std::cmp::Ordering;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -65,7 +66,7 @@ impl Default for WakeUpRequest {
     fn default() -> Self {
         Self {
             wing: None,
-            identity: IdentitySource::MissingDefault,
+            identity: IdentitySource::DefaultPath(default_identity_path()),
             layer1: Layer1Config::default(),
         }
     }
@@ -75,6 +76,7 @@ impl Default for WakeUpRequest {
 pub enum IdentitySource {
     Inline(String),
     Path(PathBuf),
+    DefaultPath(PathBuf),
     MissingDefault,
 }
 
@@ -85,10 +87,14 @@ impl IdentitySource {
             Self::Path(path) => fs::read_to_string(path)
                 .map(|text| text.trim().to_owned())
                 .map_err(|source| SearchError::IdentityRead { path: path.clone(), source }),
-            Self::MissingDefault => Ok(
-                "## L0 - IDENTITY\nNo identity configured. Create ~/.mempalace/identity.txt"
-                    .to_owned(),
-            ),
+            Self::DefaultPath(path) => match fs::read_to_string(path) {
+                Ok(text) => Ok(text.trim().to_owned()),
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                    Ok(default_identity_banner())
+                }
+                Err(source) => Err(SearchError::IdentityRead { path: path.clone(), source }),
+            },
+            Self::MissingDefault => Ok(default_identity_banner()),
         }
     }
 }
@@ -143,15 +149,11 @@ where
 
         let request = EmbeddingRequest::new(vec![query.text.clone()])?;
         let response = self.provider.embed(&request)?;
-        let query_embedding = response
-            .vectors()
-            .first()
-            .cloned()
-            .ok_or_else(|| {
-                SearchError::Embeddings(mempalace_embeddings::EmbeddingError::ProviderContract(
-                    "provider returned no vector for a non-empty search query".to_owned(),
-                ))
-            })?;
+        let query_embedding = response.vectors().first().cloned().ok_or_else(|| {
+            SearchError::Embeddings(mempalace_embeddings::EmbeddingError::ProviderContract(
+                "provider returned no vector for a non-empty search query".to_owned(),
+            ))
+        })?;
 
         let matches = store
             .search_drawers(&SearchRequest {
@@ -168,7 +170,7 @@ where
         Ok(rank_matches(matches, query.limit)
             .into_iter()
             .map(|entry| SearchResult {
-                drawer_id: None,
+                drawer_id: Some(entry.record.id.clone()),
                 wing: entry.record.wing.clone(),
                 room: entry.record.room.clone(),
                 score: entry.score,
@@ -243,15 +245,22 @@ where
         S: DrawerStore,
     {
         let identity = request.identity.render()?;
-        let story = generate_layer1(
-            store,
-            request.wing.clone(),
-            request.layer1.clone(),
-        )
-        .await?;
+        let story = generate_layer1(store, request.wing.clone(), request.layer1.clone()).await?;
 
         Ok(format!("{identity}\n\n{story}"))
     }
+}
+
+fn default_identity_path() -> PathBuf {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("~"))
+        .join(".mempalace")
+        .join("identity.txt")
+}
+
+fn default_identity_banner() -> String {
+    "## L0 — IDENTITY\nNo identity configured. Create ~/.mempalace/identity.txt".to_owned()
 }
 
 pub fn render_search_results(
@@ -281,7 +290,12 @@ pub fn render_search_results(
     lines.push(String::new());
 
     for (index, result) in results.iter().enumerate() {
-        lines.push(format!("  [{}] {} / {}", index + 1, result.wing.as_str(), result.room.as_str()));
+        lines.push(format!(
+            "  [{}] {} / {}",
+            index + 1,
+            result.wing.as_str(),
+            result.room.as_str()
+        ));
         lines.push(format!("      Source: {}", result.source_file));
         lines.push(format!("      Match:  {}", trim_similarity(result.score)));
         lines.push(String::new());
@@ -306,9 +320,7 @@ pub async fn generate_layer1<S>(
 where
     S: DrawerStore,
 {
-    let mut drawers = store
-        .list_drawers(&DrawerFilter { wing, ..DrawerFilter::default() })
-        .await?;
+    let mut drawers = store.list_drawers(&DrawerFilter { wing, ..DrawerFilter::default() }).await?;
 
     if drawers.is_empty() {
         return Ok("## L1 — No memories yet.".to_owned());
@@ -377,7 +389,9 @@ fn compare_ranked_matches(left: &RankedMatch, right: &RankedMatch) -> Ordering {
         .then_with(|| compare_distance(left.distance, right.distance))
         .then_with(|| left.record.wing.as_str().cmp(right.record.wing.as_str()))
         .then_with(|| left.record.room.as_str().cmp(right.record.room.as_str()))
-        .then_with(|| source_label(&left.record.source_file).cmp(&source_label(&right.record.source_file)))
+        .then_with(|| {
+            source_label(&left.record.source_file).cmp(&source_label(&right.record.source_file))
+        })
         .then_with(|| left.record.chunk_index.cmp(&right.record.chunk_index))
         .then_with(|| left.record.id.as_str().cmp(right.record.id.as_str()))
 }
@@ -406,10 +420,7 @@ fn order_layer_drawers(drawers: &mut [DrawerRecord]) {
     });
 }
 
-fn compare_option_dates(
-    left: Option<time::Date>,
-    right: Option<time::Date>,
-) -> Ordering {
+fn compare_option_dates(left: Option<time::Date>, right: Option<time::Date>) -> Ordering {
     match (left, right) {
         (Some(left), Some(right)) => left.cmp(&right),
         (Some(_), None) => Ordering::Greater,
@@ -436,10 +447,7 @@ fn trim_similarity(score: f32) -> String {
 }
 
 fn flatten_and_truncate(content: &str, limit: usize) -> String {
-    let flattened = content
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let flattened = content.split_whitespace().collect::<Vec<_>>().join(" ");
 
     if flattened.chars().count() <= limit {
         flattened
@@ -461,10 +469,7 @@ trait LayerWeight {
 
 impl LayerWeight for DrawerRecord {
     fn layer_weight(&self) -> f32 {
-        self.importance
-            .or(self.emotional_weight)
-            .or(self.weight)
-            .unwrap_or(3.0)
+        self.importance.or(self.emotional_weight).or(self.weight).unwrap_or(3.0)
     }
 }
 
@@ -479,8 +484,8 @@ struct RankedMatch {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        IdentitySource, Layer1Config, LayerRetrieveRequest, SearchRuntime, WakeUpRequest,
-        generate_layer1, render_search_results,
+        IdentitySource, Layer1Config, LayerRetrieveRequest, SearchError, SearchRuntime,
+        WakeUpRequest, default_identity_path, generate_layer1, render_search_results,
     };
     use async_trait::async_trait;
     use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
@@ -491,7 +496,9 @@ mod tests {
     use mempalace_storage::{
         DrawerFilter, DrawerMatch, DrawerStore, DuplicateStrategy, SearchRequest, StorageError,
     };
-    use std::path::PathBuf;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
     use time::macros::{date, datetime};
 
     fn embedding(value: f32) -> Vec<f32> {
@@ -524,9 +531,7 @@ mod tests {
             weight: None,
             content: content.to_owned(),
             content_hash: format!("hash-{id}"),
-            embedding: embedding(
-                score.unwrap_or(0.0),
-            ),
+            embedding: embedding(score.unwrap_or(0.0)),
         }
     }
 
@@ -606,9 +611,7 @@ mod tests {
                 .collect::<Vec<_>>();
 
             filtered.sort_by(|left, right| {
-                left.distance
-                    .partial_cmp(&right.distance)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                left.distance.partial_cmp(&right.distance).unwrap_or(std::cmp::Ordering::Equal)
             });
             filtered.truncate(request.limit);
             Ok(filtered)
@@ -632,10 +635,7 @@ mod tests {
             && filter.wing.as_ref().is_none_or(|wing| wing == &drawer.wing)
             && filter.room.as_ref().is_none_or(|room| room == &drawer.room)
             && filter.hall.as_ref().is_none_or(|hall| drawer.hall.as_ref() == Some(hall))
-            && filter
-                .source_file
-                .as_ref()
-                .is_none_or(|source| source == &drawer.source_file)
+            && filter.source_file.as_ref().is_none_or(|source| source == &drawer.source_file)
     }
 
     fn sample_store() -> StubStore {
@@ -681,6 +681,30 @@ mod tests {
         }
     }
 
+    fn temp_test_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        std::env::temp_dir().join(format!("mempalace-search-{prefix}-{unique}"))
+    }
+
+    fn set_home(path: &Path) -> Option<std::ffi::OsString> {
+        let previous = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", path);
+        }
+        previous
+    }
+
+    fn restore_home(previous: Option<std::ffi::OsString>) {
+        match previous {
+            Some(value) => unsafe {
+                std::env::set_var("HOME", value);
+            },
+            None => unsafe {
+                std::env::remove_var("HOME");
+            },
+        }
+    }
+
     #[tokio::test]
     async fn search_applies_filters_and_normalizes_similarity() {
         let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
@@ -698,9 +722,57 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].wing.as_str(), "wing_team");
         assert_eq!(results[0].room.as_str(), "auth-migration");
-        assert!((results[0].score - 0.49).abs() < 1e-6);
+        assert!((results[0].score - 0.51).abs() < 1e-6);
+        assert_eq!(
+            results[0].drawer_id.as_ref().map(|value| value.as_str()),
+            Some("wing_team/auth-migration/0001")
+        );
         assert_eq!(results[0].source_file, "team.txt");
         assert_eq!(results[1].room.as_str(), "phase0-rollout");
+    }
+
+    #[tokio::test]
+    async fn search_rejects_blank_query() {
+        let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+
+        let err = runtime
+            .search(
+                &store,
+                &SearchQuery {
+                    text: "   \n\t ".to_owned(),
+                    wing: None,
+                    room: None,
+                    limit: 5,
+                    profile: EmbeddingProfile::Balanced,
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SearchError::BlankQuery));
+    }
+
+    #[tokio::test]
+    async fn search_returns_empty_results_when_limit_is_zero() {
+        let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+
+        let results = runtime
+            .search(
+                &store,
+                &SearchQuery {
+                    text: "auth".to_owned(),
+                    wing: None,
+                    room: None,
+                    limit: 0,
+                    profile: EmbeddingProfile::Balanced,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(results.is_empty());
     }
 
     #[tokio::test]
@@ -758,7 +830,34 @@ mod tests {
         };
 
         let results = runtime.search(&store, &query).await.unwrap();
-        assert_eq!(results.iter().map(|entry| entry.wing.as_str()).collect::<Vec<_>>(), vec!["wing_a", "wing_b"]);
+        assert_eq!(
+            results.iter().map(|entry| entry.wing.as_str()).collect::<Vec<_>>(),
+            vec!["wing_a", "wing_b"]
+        );
+    }
+
+    #[tokio::test]
+    async fn search_applies_combined_wing_and_room_filters() {
+        let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+
+        let results = runtime
+            .search(
+                &store,
+                &SearchQuery {
+                    text: "auth".to_owned(),
+                    wing: Some(WingId::new("wing_team").unwrap()),
+                    room: Some(RoomId::new("auth-migration").unwrap()),
+                    limit: 5,
+                    profile: EmbeddingProfile::Balanced,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].wing.as_str(), "wing_team");
+        assert_eq!(results[0].room.as_str(), "auth-migration");
     }
 
     #[test]
@@ -811,9 +910,29 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(rendered.starts_with("## L2 — ON-DEMAND (2 drawers)"));
+        assert!(rendered.starts_with("## L2 — ON-DEMAND (2) drawers"));
         assert!(rendered.contains("[auth-migration] The team decided"));
         assert!(rendered.contains("[phase0-rollout] Phase 0 rollout"));
+    }
+
+    #[tokio::test]
+    async fn recall_reports_empty_store() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = StubStore { drawers: Vec::new() };
+
+        let rendered = runtime
+            .recall(
+                &store,
+                &LayerRetrieveRequest {
+                    wing: Some(WingId::new("wing_team").unwrap()),
+                    room: Some(RoomId::new("auth-migration").unwrap()),
+                    limit: 10,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rendered, "No drawers found for wing=wing_team room=auth-migration.");
     }
 
     #[tokio::test]
@@ -826,7 +945,8 @@ mod tests {
                 &WakeUpRequest {
                     wing: None,
                     identity: IdentitySource::Inline(
-                        "## L0 - IDENTITY\nI am the MemPalace phase 0 reference capture.".to_owned(),
+                        "## L0 — IDENTITY\nI am the MemPalace phase 0 reference capture."
+                            .to_owned(),
                     ),
                     layer1: Layer1Config { max_drawers: 4, max_chars: 3_200 },
                 },
@@ -834,7 +954,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(rendered.starts_with("## L0 - IDENTITY"));
+        assert!(rendered.starts_with("## L0 — IDENTITY"));
         assert!(rendered.contains("## L1 — ESSENTIAL STORY"));
         let auth_index = rendered.find("[auth-migration]").unwrap();
         let backend_index = rendered.find("[backend]").unwrap();
@@ -862,6 +982,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generate_layer1_truncates_when_max_chars_is_exceeded() {
+        let store = sample_store();
+        let rendered =
+            generate_layer1(&store, None, Layer1Config { max_drawers: 4, max_chars: 120 })
+                .await
+                .unwrap();
+
+        assert!(rendered.contains("## L1 — ESSENTIAL STORY"));
+        assert!(rendered.contains("... (more in L3 search)"));
+    }
+
+    #[tokio::test]
     async fn search_text_reports_empty_results() {
         let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(100.0)] });
         let store = StubStore { drawers: Vec::new() };
@@ -883,14 +1015,61 @@ mod tests {
     }
 
     #[test]
-    fn identity_source_can_load_inline_or_missing_default() {
-        assert_eq!(
-            IdentitySource::Inline(" hello \n".to_owned()).render().unwrap(),
-            "hello"
+    fn identity_source_can_load_inline_path_and_missing_default() {
+        assert_eq!(IdentitySource::Inline(" hello \n".to_owned()).render().unwrap(), "hello");
+        let dir = temp_test_dir("identity-inline");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("identity.txt");
+        fs::write(&path, " from file \n").unwrap();
+        assert_eq!(IdentitySource::Path(path.clone()).render().unwrap(), "from file");
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            IdentitySource::MissingDefault.render().unwrap().contains("No identity configured")
         );
-        assert!(IdentitySource::MissingDefault
+    }
+
+    #[test]
+    fn identity_source_path_reports_read_errors() {
+        let err = IdentitySource::Path(PathBuf::from("/definitely/missing/identity.txt"))
             .render()
-            .unwrap()
-            .contains("No identity configured"));
+            .unwrap_err();
+
+        assert!(matches!(err, SearchError::IdentityRead { .. }));
+    }
+
+    #[test]
+    fn wake_up_request_default_reads_home_identity_when_present() {
+        let dir = temp_test_dir("default-identity");
+        let identity_dir = dir.join(".mempalace");
+        fs::create_dir_all(&identity_dir).unwrap();
+        fs::write(
+            identity_dir.join("identity.txt"),
+            "## L0 — IDENTITY\nConfigured by home directory.\n",
+        )
+        .unwrap();
+
+        let previous_home = set_home(&dir);
+        assert_eq!(default_identity_path(), identity_dir.join("identity.txt"));
+        let rendered = WakeUpRequest::default().identity.render().unwrap();
+        restore_home(previous_home);
+
+        assert_eq!(rendered, "## L0 — IDENTITY\nConfigured by home directory.");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn wake_up_request_default_falls_back_when_home_identity_is_missing() {
+        let dir = temp_test_dir("default-missing");
+        fs::create_dir_all(&dir).unwrap();
+
+        let previous_home = set_home(&dir);
+        let rendered = WakeUpRequest::default().identity.render().unwrap();
+        restore_home(previous_home);
+
+        assert_eq!(
+            rendered,
+            "## L0 — IDENTITY\nNo identity configured. Create ~/.mempalace/identity.txt"
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
