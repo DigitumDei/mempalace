@@ -126,6 +126,20 @@ impl LanceDrawerStore {
 
         Ok(())
     }
+
+    async fn filtered_row_count(
+        &self,
+        table: &lancedb::Table,
+        filter: &DrawerFilter,
+    ) -> Result<usize> {
+        let filter_sql = compile_filter(filter);
+        let count = if filter_sql.is_empty() {
+            table.count_rows(None).await?
+        } else {
+            table.count_rows(Some(filter_sql)).await?
+        };
+        Ok(count)
+    }
 }
 
 #[async_trait]
@@ -241,7 +255,12 @@ impl DrawerStore for LanceDrawerStore {
 
     async fn list_drawers(&self, filter: &DrawerFilter) -> Result<Vec<DrawerRecord>> {
         let table = self.table().await?;
-        let mut query = table.query().limit(10_000);
+        let row_count = self.filtered_row_count(&table, filter).await?;
+        if row_count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut query = table.query().limit(row_count);
         let filter_sql = compile_filter(filter);
         if !filter_sql.is_empty() {
             query = query.only_if(filter_sql);
@@ -657,6 +676,37 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].record.room.as_str(), "backend");
+    }
+
+    #[tokio::test]
+    async fn list_drawers_returns_all_rows_beyond_ten_thousand() {
+        let tempdir = tempdir().unwrap();
+        let store = LanceDrawerStore::new(tempdir.path().join("lance"), EmbeddingProfile::Balanced);
+        store.ensure_schema().await.unwrap();
+
+        let drawers = (0..10_005)
+            .map(|index| {
+                record(
+                    &format!("project_alpha/backend/{index:04}"),
+                    "project_alpha",
+                    "backend",
+                    "bulk.txt",
+                    [0.1, 0.2, 0.3, 0.4],
+                )
+            })
+            .collect::<Vec<_>>();
+        store.put_drawers(&drawers, DuplicateStrategy::Error).await.unwrap();
+
+        let results = store
+            .list_drawers(&DrawerFilter {
+                wing: Some(WingId::new("project_alpha").unwrap()),
+                room: Some(RoomId::new("backend").unwrap()),
+                ..DrawerFilter::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 10_005);
     }
 
     #[tokio::test]

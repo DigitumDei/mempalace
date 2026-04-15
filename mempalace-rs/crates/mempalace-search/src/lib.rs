@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -154,16 +155,21 @@ where
                 "provider returned no vector for a non-empty search query".to_owned(),
             ))
         })?;
+        let filter = DrawerFilter {
+            wing: query.wing.clone(),
+            room: query.room.clone(),
+            ..DrawerFilter::default()
+        };
+        let candidate_count = store.list_drawers(&filter).await?.len();
+        if candidate_count == 0 {
+            return Ok(Vec::new());
+        }
 
         let matches = store
             .search_drawers(&SearchRequest {
                 embedding: query_embedding,
-                limit: query.limit,
-                filter: DrawerFilter {
-                    wing: query.wing.clone(),
-                    room: query.room.clone(),
-                    ..DrawerFilter::default()
-                },
+                limit: candidate_count,
+                filter,
             })
             .await?;
 
@@ -329,18 +335,19 @@ where
     order_layer_drawers(&mut drawers);
     let top = drawers.into_iter().take(config.max_drawers).collect::<Vec<_>>();
 
-    let mut grouped = std::collections::BTreeMap::<String, Vec<DrawerRecord>>::new();
+    let mut grouped = BTreeMap::<String, Vec<DrawerRecord>>::new();
     for record in top {
         grouped.entry(record.room.as_str().to_owned()).or_default().push(record);
     }
 
     let mut lines = vec!["## L1 — ESSENTIAL STORY".to_owned()];
-    let mut total_len = lines[0].len();
+    let mut total_chars = char_count(&lines[0]);
 
     for (room, records) in grouped {
         let room_line = format!("\n[{room}]");
-        lines.push(room_line.clone());
-        total_len += room_line.len();
+        let room_chars = char_count(&room_line);
+        let mut room_lines = Vec::new();
+        let mut room_has_entries = false;
 
         for record in records {
             let snippet = flatten_and_truncate(&record.content, LAYER1_SNIPPET_LIMIT);
@@ -353,14 +360,25 @@ where
                 entry.push(')');
             }
 
-            if total_len + entry.len() > config.max_chars {
+            let entry_chars = char_count(&entry);
+            let next_total =
+                total_chars + if room_has_entries { 0 } else { room_chars } + entry_chars;
+            if next_total > config.max_chars {
                 lines.push("  ... (more in L3 search)".to_owned());
                 return Ok(lines.join("\n"));
             }
 
-            total_len += entry.len();
-            lines.push(entry);
+            if !room_has_entries {
+                lines.push(room_line.clone());
+                total_chars += room_chars;
+                room_has_entries = true;
+            }
+
+            total_chars += entry_chars;
+            room_lines.push(entry);
         }
+
+        lines.extend(room_lines);
     }
 
     Ok(lines.join("\n"))
@@ -456,6 +474,10 @@ fn flatten_and_truncate(content: &str, limit: usize) -> String {
     }
 }
 
+fn char_count(value: &str) -> usize {
+    value.chars().count()
+}
+
 fn source_label(source_file: &str) -> String {
     Path::new(source_file)
         .file_name()
@@ -496,10 +518,14 @@ mod tests {
     use mempalace_storage::{
         DrawerFilter, DrawerMatch, DrawerStore, DuplicateStrategy, SearchRequest, StorageError,
     };
+    use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::{LazyLock, Mutex, MutexGuard};
     use std::time::{SystemTime, UNIX_EPOCH};
     use time::macros::{date, datetime};
+
+    static HOME_ENV_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn embedding(value: f32) -> Vec<f32> {
         vec![value; EmbeddingProfile::Balanced.metadata().dimensions]
@@ -686,22 +712,32 @@ mod tests {
         std::env::temp_dir().join(format!("mempalace-search-{prefix}-{unique}"))
     }
 
-    fn set_home(path: &Path) -> Option<std::ffi::OsString> {
-        let previous = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", path);
-        }
-        previous
+    struct HomeEnvGuard {
+        previous: Option<OsString>,
+        _lock: MutexGuard<'static, ()>,
     }
 
-    fn restore_home(previous: Option<std::ffi::OsString>) {
-        match previous {
-            Some(value) => unsafe {
-                std::env::set_var("HOME", value);
-            },
-            None => unsafe {
-                std::env::remove_var("HOME");
-            },
+    impl HomeEnvGuard {
+        fn set(path: &Path) -> Self {
+            let lock = HOME_ENV_MUTEX.lock().unwrap();
+            let previous = std::env::var_os("HOME");
+            unsafe {
+                std::env::set_var("HOME", path);
+            }
+            Self { previous, _lock: lock }
+        }
+    }
+
+    impl Drop for HomeEnvGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => unsafe {
+                    std::env::set_var("HOME", value);
+                },
+                None => unsafe {
+                    std::env::remove_var("HOME");
+                },
+            }
         }
     }
 
@@ -837,6 +873,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_overfetches_candidates_before_truncating_top_k() {
+        let store = StubStore {
+            drawers: vec![
+                record(
+                    "wing_b/general/0001",
+                    "wing_b",
+                    "general",
+                    "zeta.txt",
+                    "B",
+                    Some(0.5),
+                    datetime!(2026-04-11 09:00:00 UTC),
+                ),
+                record(
+                    "wing_a/general/0001",
+                    "wing_a",
+                    "general",
+                    "alpha.txt",
+                    "A",
+                    Some(0.5),
+                    datetime!(2026-04-11 09:00:00 UTC),
+                ),
+            ],
+        };
+        let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let query = SearchQuery {
+            text: "tie".to_owned(),
+            wing: None,
+            room: None,
+            limit: 1,
+            profile: EmbeddingProfile::Balanced,
+        };
+
+        let results = runtime.search(&store, &query).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].wing.as_str(), "wing_a");
+    }
+
+    #[tokio::test]
     async fn search_applies_combined_wing_and_room_filters() {
         let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
         let store = sample_store();
@@ -858,6 +932,29 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].wing.as_str(), "wing_team");
         assert_eq!(results[0].room.as_str(), "auth-migration");
+    }
+
+    #[tokio::test]
+    async fn search_applies_room_only_filters() {
+        let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+
+        let results = runtime
+            .search(
+                &store,
+                &SearchQuery {
+                    text: "auth".to_owned(),
+                    wing: None,
+                    room: Some(RoomId::new("auth-migration").unwrap()),
+                    limit: 5,
+                    profile: EmbeddingProfile::Balanced,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.room.as_str() == "auth-migration"));
     }
 
     #[test]
@@ -1014,6 +1111,29 @@ mod tests {
         assert_eq!(rendered, "\n  No results found for: \"missing\"");
     }
 
+    #[tokio::test]
+    async fn search_text_renders_non_empty_results() {
+        let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+        let rendered = runtime
+            .search_text(
+                &store,
+                &SearchQuery {
+                    text: "auth".to_owned(),
+                    wing: Some(WingId::new("wing_team").unwrap()),
+                    room: None,
+                    limit: 2,
+                    profile: EmbeddingProfile::Balanced,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(rendered.contains("Results for: \"auth\""));
+        assert!(rendered.contains("Wing: wing_team"));
+        assert!(rendered.contains("Source: team.txt"));
+    }
+
     #[test]
     fn identity_source_can_load_inline_path_and_missing_default() {
         assert_eq!(IdentitySource::Inline(" hello \n".to_owned()).render().unwrap(), "hello");
@@ -1048,10 +1168,9 @@ mod tests {
         )
         .unwrap();
 
-        let previous_home = set_home(&dir);
+        let _home = HomeEnvGuard::set(&dir);
         assert_eq!(default_identity_path(), identity_dir.join("identity.txt"));
         let rendered = WakeUpRequest::default().identity.render().unwrap();
-        restore_home(previous_home);
 
         assert_eq!(rendered, "## L0 — IDENTITY\nConfigured by home directory.");
         fs::remove_dir_all(&dir).unwrap();
@@ -1062,14 +1181,103 @@ mod tests {
         let dir = temp_test_dir("default-missing");
         fs::create_dir_all(&dir).unwrap();
 
-        let previous_home = set_home(&dir);
+        let _home = HomeEnvGuard::set(&dir);
         let rendered = WakeUpRequest::default().identity.render().unwrap();
-        restore_home(previous_home);
 
         assert_eq!(
             rendered,
             "## L0 — IDENTITY\nNo identity configured. Create ~/.mempalace/identity.txt"
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn generate_layer1_reports_empty_store_directly() {
+        let store = StubStore { drawers: Vec::new() };
+        let rendered = generate_layer1(&store, None, Layer1Config::default()).await.unwrap();
+
+        assert_eq!(rendered, "## L1 — No memories yet.");
+    }
+
+    #[tokio::test]
+    async fn wake_up_reports_empty_store_story() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = StubStore { drawers: Vec::new() };
+        let rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: None,
+                    identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+                    layer1: Layer1Config::default(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(rendered.contains("## L0 — IDENTITY\nReady."));
+        assert!(rendered.contains("## L1 — No memories yet."));
+    }
+
+    #[tokio::test]
+    async fn generate_layer1_counts_unicode_chars_in_budget() {
+        let store = StubStore {
+            drawers: vec![record(
+                "wing_team/cafe/0001",
+                "wing_team",
+                "cafe",
+                "fixtures/cafe.txt",
+                "éééééééééééééééééééé",
+                Some(0.9),
+                datetime!(2026-04-11 09:00:00 UTC),
+            )],
+        };
+        let entry = "  - éééééééééééééééééééé  (cafe.txt)";
+        let max_chars = super::char_count("## L1 — ESSENTIAL STORY")
+            + super::char_count("\n[cafe]")
+            + super::char_count(entry);
+
+        let rendered = generate_layer1(&store, None, Layer1Config { max_drawers: 1, max_chars })
+            .await
+            .unwrap();
+
+        assert!(rendered.contains(entry));
+        assert!(!rendered.contains("... (more in L3 search)"));
+    }
+
+    #[tokio::test]
+    async fn generate_layer1_does_not_emit_orphan_room_headers_on_truncation() {
+        let store = StubStore {
+            drawers: vec![
+                record(
+                    "wing_team/alpha/0001",
+                    "wing_team",
+                    "alpha",
+                    "fixtures/alpha.txt",
+                    "alpha entry",
+                    Some(0.9),
+                    datetime!(2026-04-11 09:00:00 UTC),
+                ),
+                record(
+                    "wing_team/beta/0001",
+                    "wing_team",
+                    "beta",
+                    "fixtures/beta.txt",
+                    "beta entry that should be truncated",
+                    Some(0.8),
+                    datetime!(2026-04-11 08:00:00 UTC),
+                ),
+            ],
+        };
+        let max_chars =
+            super::char_count("## L1 — ESSENTIAL STORY\n\n[alpha]\n  - alpha entry  (alpha.txt)");
+
+        let rendered = generate_layer1(&store, None, Layer1Config { max_drawers: 2, max_chars })
+            .await
+            .unwrap();
+
+        assert!(rendered.contains("[alpha]"));
+        assert!(!rendered.contains("[beta]"));
+        assert!(rendered.contains("... (more in L3 search)"));
     }
 }

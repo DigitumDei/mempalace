@@ -78,11 +78,11 @@ Operational consequence:
 - [x] Generate wake-up output in stable order.
 - [x] Decide compressed drawer scope for first release.
 - [ ] Implement compressed drawer retrieval if retained.
-- [x] Add retrieval golden tests.
+- [ ] Add retrieval golden tests.
 - [x] Add filter tests.
 - [x] Add empty-state tests.
-- [x] Add wake-up golden tests.
-- [x] Add layered output integration tests.
+- [ ] Add wake-up golden tests.
+- [ ] Add layered output integration tests.
 - [ ] Add tolerant retrieval quality checks.
 - [ ] Measure top-5 overlap against Python reference.
 - [ ] Measure Recall@5 ratio against Python reference.
@@ -98,3 +98,9 @@ Operational consequence:
 - Chasing bit-identical ranking where the plan only requires tolerant quality parity.
 - Leaving tie-breaking implicit and nondeterministic.
 - Mixing output-format parity with retrieval-quality parity in one gate.
+
+## Current Validation Scope
+
+Current Phase 5 coverage is centered on Rust unit and backend tests for ranking, filters, empty states,
+layered assembly, wake-up identity loading, Unicode budget handling, and Lance full-corpus listing.
+Fixture-backed golden files and broader end-to-end integration parity checks remain pending work.
