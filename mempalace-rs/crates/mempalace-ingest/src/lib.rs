@@ -1317,7 +1317,24 @@ fn transcript_to_messages(transcript: &str) -> Vec<Message> {
 }
 
 fn spellcheck_user_text(text: &str) -> String {
-    text.split_whitespace().map(correct_token).collect::<Vec<_>>().join(" ")
+    let mut result = String::with_capacity(text.len());
+    let mut start = 0usize;
+
+    for (index, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            if start < index {
+                result.push_str(correct_token(&text[start..index]).as_ref());
+            }
+            result.push(ch);
+            start = index + ch.len_utf8();
+        }
+    }
+
+    if start < text.len() {
+        result.push_str(correct_token(&text[start..]).as_ref());
+    }
+
+    result
 }
 
 fn correct_token(token: &str) -> Cow<'_, str> {
@@ -1857,6 +1874,18 @@ mod tests {
         let normalized =
             normalize_conversation(Path::new("chat.json"), payload.to_string().as_bytes()).unwrap();
         assert!(normalized.transcript.contains("> already know the question before"));
+        assert!(normalized.transcript.contains("I already do."));
+    }
+
+    #[test]
+    fn spellcheck_preserves_user_whitespace() {
+        let payload = json!([
+            {"role": "user", "content": "lsresdy\tknoe\nbefor"},
+            {"role": "assistant", "content": "I already do."}
+        ]);
+        let normalized =
+            normalize_conversation(Path::new("chat.json"), payload.to_string().as_bytes()).unwrap();
+        assert!(normalized.transcript.contains("> already\tknow\nbefore"));
         assert!(normalized.transcript.contains("I already do."));
     }
 
