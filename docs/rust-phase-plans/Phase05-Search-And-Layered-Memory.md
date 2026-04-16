@@ -47,24 +47,40 @@ Reproduce semantic search, metadata filtering, layered retrieval, and wake-up be
 - Wake-up generation path
 - Scope decision record for compressed drawers
 
+## Scope Decision: Compressed Drawers
+
+Compressed drawers are deferred from the first Rust release.
+
+Reasoning:
+
+- Phase 5 needs retrieval parity, stable wake-up output, and deterministic filter semantics on the raw drawer corpus first.
+- The current Rust storage layer does not yet carry a separate compressed-drawer table or retrieval path, and leaving that implicit would create a hidden dependency between Phase 5 and later storage/AAAK work.
+- AAAK integration is already scheduled explicitly in Phase 7, which is the correct point to decide rendering shape and any compressed retrieval path together.
+
+Operational consequence:
+
+- Phase 5 implements search, recall, and wake-up only over the canonical raw drawer records.
+- Phase 2 and later phases should treat compressed-drawer storage as out of scope unless the release plan is explicitly reopened.
+- Phase 7 may add AAAK-backed wake-up rendering without requiring a separate compressed retrieval collection for first release.
+
 ## To-Do Checklist
 
-- [ ] Implement query embedding to vector search flow.
-- [ ] Implement `top_k` retrieval handling.
-- [ ] Implement wing prefiltering.
-- [ ] Implement room prefiltering.
-- [ ] Match Python filter semantics on fixtures.
-- [ ] Implement score normalization.
-- [ ] Implement deterministic tie-breaking.
-- [ ] Implement empty-result behavior.
-- [ ] Implement layered memory assembly.
-- [ ] Implement wake-up generation.
-- [ ] Generate wake-up output in stable order.
-- [ ] Decide compressed drawer scope for first release.
+- [x] Implement query embedding to vector search flow.
+- [x] Implement `top_k` retrieval handling.
+- [x] Implement wing prefiltering.
+- [x] Implement room prefiltering.
+- [x] Match Python filter semantics on fixtures.
+- [x] Implement score normalization.
+- [x] Implement deterministic tie-breaking.
+- [x] Implement empty-result behavior.
+- [x] Implement layered memory assembly.
+- [x] Implement wake-up generation.
+- [x] Generate wake-up output in stable order.
+- [x] Decide compressed drawer scope for first release.
 - [ ] Implement compressed drawer retrieval if retained.
 - [ ] Add retrieval golden tests.
-- [ ] Add filter tests.
-- [ ] Add empty-state tests.
+- [x] Add filter tests.
+- [x] Add empty-state tests.
 - [ ] Add wake-up golden tests.
 - [ ] Add layered output integration tests.
 - [ ] Add tolerant retrieval quality checks.
@@ -82,3 +98,9 @@ Reproduce semantic search, metadata filtering, layered retrieval, and wake-up be
 - Chasing bit-identical ranking where the plan only requires tolerant quality parity.
 - Leaving tie-breaking implicit and nondeterministic.
 - Mixing output-format parity with retrieval-quality parity in one gate.
+
+## Current Validation Scope
+
+Current Phase 5 coverage is centered on Rust unit and backend tests for ranking, filters, empty states,
+layered assembly, wake-up identity loading, Unicode budget handling, and Lance full-corpus listing.
+Fixture-backed golden files and broader end-to-end integration parity checks remain pending work.
