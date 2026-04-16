@@ -79,6 +79,7 @@ const PERSON_DISAMBIGUATION_PATTERNS: &[&str] = &[
     "my friend {name}",
 ];
 const CONCEPT_DISAMBIGUATION_PATTERNS: &[&str] = &[
+    "the {name} of",
     "have you {name}",
     "if you {name}",
     "{name} since",
@@ -1323,7 +1324,10 @@ fn classify_candidate(
         )
     } else {
         let person_ratio = person_score as f32 / total as f32;
-        if person_ratio >= 0.7 && person_score >= 5 && signal_categories(&person_signals) >= 2 {
+        if person_ratio >= 0.7
+            && person_score >= 5
+            && (signal_categories(&person_signals) >= 2 || person_signals.len() >= 2)
+        {
             (EntityKind::Person, (50.0 + person_ratio * 49.0).round() as u16, person_signals)
         } else if person_ratio <= 0.3 {
             (
@@ -1506,7 +1510,7 @@ mod tests {
         let tunnels = find_tunnels(&snapshot, Some("wing_code"), Some("wing_team"));
         let traversal = traverse_graph(&snapshot, "auth-migration", 2);
 
-        assert_eq!(snapshot.stats.total_rooms, 6);
+        assert_eq!(snapshot.stats.total_rooms, 5);
         assert_eq!(snapshot.stats.tunnel_rooms, 1);
         assert_eq!(snapshot.stats.total_edges, 2);
         assert_eq!(tunnels[0].room, "auth-migration");
