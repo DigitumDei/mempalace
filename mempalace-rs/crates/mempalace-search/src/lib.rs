@@ -67,7 +67,9 @@ impl Default for WakeUpRequest {
     fn default() -> Self {
         Self {
             wing: None,
-            identity: IdentitySource::DefaultPath(default_identity_path()),
+            identity: default_identity_path()
+                .map(IdentitySource::DefaultPath)
+                .unwrap_or(IdentitySource::MissingDefault),
             layer1: Layer1Config::default(),
         }
     }
@@ -177,7 +179,7 @@ where
                 room: entry.record.room.clone(),
                 score: entry.score,
                 content: entry.record.content.clone(),
-                source_file: source_label(&entry.record.source_file),
+                source_file: source_label(&entry.record.source_file).to_owned(),
             })
             .collect())
     }
@@ -194,7 +196,6 @@ where
     where
         S: DrawerStore,
     {
-        let limit = if request.limit == 0 { 10 } else { request.limit };
         let mut drawers = store
             .list_drawers(&DrawerFilter {
                 wing: request.wing.clone(),
@@ -226,8 +227,9 @@ where
             });
         }
 
-        let mut lines = vec![format!("## L2 — ON-DEMAND ({}) drawers", drawers.len().min(limit))];
-        for record in drawers.iter().take(limit) {
+        let mut lines =
+            vec![format!("## L2 — ON-DEMAND ({}) drawers", drawers.len().min(request.limit))];
+        for record in drawers.iter().take(request.limit) {
             let snippet = flatten_and_truncate(&record.content, LAYER2_SNIPPET_LIMIT);
             let mut entry = format!("  [{}] {}", record.room.as_str(), snippet);
             let source = source_label(&record.source_file);
@@ -253,12 +255,8 @@ where
     }
 }
 
-fn default_identity_path() -> PathBuf {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".mempalace")
-        .join("identity.txt")
+fn default_identity_path() -> Option<PathBuf> {
+    env::var_os("HOME").map(|home| PathBuf::from(home).join(".mempalace").join("identity.txt"))
 }
 
 fn default_identity_banner() -> String {
@@ -450,15 +448,9 @@ fn normalize_score(distance: Option<f32>) -> f32 {
 
 fn trim_similarity(score: f32) -> String {
     let rounded = (score * 1_000.0).round() / 1_000.0;
-    if rounded.fract() == 0.0 {
-        format!("{rounded:.0}")
-    } else if ((rounded * 10.0).round() - (rounded * 10.0)).abs() < f32::EPSILON {
-        format!("{rounded:.1}")
-    } else if ((rounded * 100.0).round() - (rounded * 100.0)).abs() < f32::EPSILON {
-        format!("{rounded:.2}")
-    } else {
-        format!("{rounded:.3}")
-    }
+    let formatted = format!("{rounded:.3}");
+    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() { "0".to_owned() } else { trimmed.to_owned() }
 }
 
 fn flatten_and_truncate(content: &str, limit: usize) -> String {
@@ -475,11 +467,8 @@ fn char_count(value: &str) -> usize {
     value.chars().count()
 }
 
-fn source_label(source_file: &str) -> String {
-    Path::new(source_file)
-        .file_name()
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| source_file.to_owned())
+fn source_label(source_file: &str) -> &str {
+    Path::new(source_file).file_name().and_then(|value| value.to_str()).unwrap_or(source_file)
 }
 
 trait LayerWeight {
@@ -1204,7 +1193,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recall_limit_zero_uses_default_limit_of_ten() {
+    async fn recall_limit_zero_returns_zero_drawers() {
         let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
         let store = StubStore {
             drawers: (0..12)
@@ -1234,8 +1223,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(rendered.starts_with("## L2 — ON-DEMAND (10) drawers"));
-        assert_eq!(rendered.matches("\n  [general] ").count(), 10);
+        assert_eq!(rendered, "## L2 — ON-DEMAND (0) drawers");
     }
 
     #[tokio::test]
@@ -1400,7 +1388,7 @@ mod tests {
         .unwrap();
 
         let _home = HomeEnvGuard::set(&dir);
-        assert_eq!(default_identity_path(), identity_dir.join("identity.txt"));
+        assert_eq!(default_identity_path(), Some(identity_dir.join("identity.txt")));
         let rendered = WakeUpRequest::default().identity.render().unwrap();
 
         assert_eq!(rendered, "## L0 — IDENTITY\nConfigured by home directory.");
@@ -1426,10 +1414,7 @@ mod tests {
     fn wake_up_request_default_uses_literal_tilde_path_when_home_is_unset() {
         let _home = HomeEnvGuard::unset();
 
-        assert_eq!(
-            default_identity_path(),
-            PathBuf::from("~").join(".mempalace").join("identity.txt")
-        );
+        assert_eq!(default_identity_path(), None);
         assert_eq!(
             WakeUpRequest::default().identity.render().unwrap(),
             "## L0 — IDENTITY\nNo identity configured. Create ~/.mempalace/identity.txt"

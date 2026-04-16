@@ -127,20 +127,6 @@ impl LanceDrawerStore {
         Ok(())
     }
 
-    async fn filtered_row_count(
-        &self,
-        table: &lancedb::Table,
-        filter: &DrawerFilter,
-    ) -> Result<usize> {
-        let filter_sql = compile_filter(filter);
-        let count = if filter_sql.is_empty() {
-            table.count_rows(None).await?
-        } else {
-            table.count_rows(Some(filter_sql)).await?
-        };
-        Ok(count)
-    }
-
     async fn execute_search(
         &self,
         table: &lancedb::Table,
@@ -308,12 +294,7 @@ impl DrawerStore for LanceDrawerStore {
 
     async fn list_drawers(&self, filter: &DrawerFilter) -> Result<Vec<DrawerRecord>> {
         let table = self.table().await?;
-        let row_count = self.filtered_row_count(&table, filter).await?;
-        if row_count == 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut query = table.query().limit(row_count);
+        let mut query = table.query();
         let filter_sql = compile_filter(filter);
         if !filter_sql.is_empty() {
             query = query.only_if(filter_sql);
