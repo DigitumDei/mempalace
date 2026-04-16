@@ -7,6 +7,11 @@ rust-version.workspace = true
 
 [dependencies]
 mempalace-core = { path = "../mempalace-core" }
+thiserror.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

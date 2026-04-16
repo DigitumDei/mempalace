@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 mempalace-core = { path = "../mempalace-core" }
+mempalace-dialect = { path = "../mempalace-dialect" }
 mempalace-embeddings = { path = "../mempalace-embeddings" }
 mempalace-storage = { path = "../mempalace-storage" }
 thiserror.workspace = true

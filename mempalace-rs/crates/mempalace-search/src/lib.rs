@@ -7,10 +7,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use mempalace_core as core;
+pub use mempalace_dialect as dialect;
 pub use mempalace_embeddings as embeddings;
 pub use mempalace_storage as storage;
 
 use mempalace_core::{DrawerRecord, SearchQuery, SearchResult};
+use mempalace_dialect::{Dialect, WakeUpAaaKConfig};
 use mempalace_embeddings::{EmbeddingProvider, EmbeddingRequest};
 use mempalace_storage::{DrawerFilter, DrawerMatch, DrawerStore, SearchRequest};
 use thiserror::Error;
@@ -61,6 +63,7 @@ pub struct WakeUpRequest {
     pub wing: Option<mempalace_core::WingId>,
     pub identity: IdentitySource,
     pub layer1: Layer1Config,
+    pub format: WakeUpFormat,
 }
 
 impl Default for WakeUpRequest {
@@ -71,8 +74,16 @@ impl Default for WakeUpRequest {
                 .map(IdentitySource::DefaultPath)
                 .unwrap_or(IdentitySource::MissingDefault),
             layer1: Layer1Config::default(),
+            format: WakeUpFormat::PlainText,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WakeUpFormat {
+    #[default]
+    PlainText,
+    AaaK,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,9 +260,24 @@ where
         S: DrawerStore,
     {
         let identity = request.identity.render()?;
-        let story = generate_layer1(store, request.wing.clone(), request.layer1.clone()).await?;
-
-        Ok(format!("{identity}\n\n{story}"))
+        match request.format {
+            WakeUpFormat::PlainText => {
+                let story = generate_layer1(store, request.wing.clone(), request.layer1.clone()).await?;
+                Ok(format!("{identity}\n\n{story}"))
+            }
+            WakeUpFormat::AaaK => {
+                let drawers = list_layer_drawers(store, request.wing.clone()).await?;
+                let dialect = Dialect::new();
+                Ok(dialect.render_wake_up_aaak(
+                    &identity,
+                    &drawers,
+                    &WakeUpAaaKConfig {
+                        max_drawers: request.layer1.max_drawers,
+                        max_chars: request.layer1.max_chars,
+                    },
+                ))
+            }
+        }
     }
 }
 
@@ -320,7 +346,7 @@ pub async fn generate_layer1<S>(
 where
     S: DrawerStore,
 {
-    let mut drawers = store.list_drawers(&DrawerFilter { wing, ..DrawerFilter::default() }).await?;
+    let mut drawers = list_layer_drawers(store, wing).await?;
 
     if drawers.is_empty() {
         return Ok("## L1 — No memories yet.".to_owned());
@@ -377,6 +403,16 @@ where
     }
 
     Ok(lines.join("\n"))
+}
+
+async fn list_layer_drawers<S>(
+    store: &S,
+    wing: Option<mempalace_core::WingId>,
+) -> Result<Vec<DrawerRecord>>
+where
+    S: DrawerStore,
+{
+    Ok(store.list_drawers(&DrawerFilter { wing, ..DrawerFilter::default() }).await?)
 }
 
 fn rank_matches(matches: Vec<DrawerMatch>, limit: usize) -> Vec<RankedMatch> {
@@ -493,8 +529,8 @@ struct RankedMatch {
 mod tests {
     use super::{
         IdentitySource, Layer1Config, LayerRetrieveRequest, SearchError, SearchRuntime,
-        WakeUpRequest, default_identity_path, generate_layer1, render_search_results,
-        trim_similarity,
+        WakeUpFormat, WakeUpRequest, default_identity_path, generate_layer1,
+        render_search_results, trim_similarity,
     };
     use async_trait::async_trait;
     use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
@@ -1240,6 +1276,7 @@ mod tests {
                             .to_owned(),
                     ),
                     layer1: Layer1Config { max_drawers: 4, max_chars: 3_200 },
+                    format: WakeUpFormat::PlainText,
                 },
             )
             .await
@@ -1268,6 +1305,7 @@ mod tests {
                     wing: Some(WingId::new("wing_code").unwrap()),
                     identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
                     layer1: Layer1Config::default(),
+                    format: WakeUpFormat::PlainText,
                 },
             )
             .await
@@ -1279,6 +1317,30 @@ mod tests {
         assert!(rendered.contains("code.txt"));
         assert!(!rendered.contains("team.txt"));
         assert!(!rendered.contains("auth.py"));
+    }
+
+    #[tokio::test]
+    async fn wake_up_supports_aaak_format() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+
+        let rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: Some(WingId::new("wing_code").unwrap()),
+                    identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+                    layer1: Layer1Config::default(),
+                    format: WakeUpFormat::AaaK,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(rendered.contains("## L1 — AAAK STORY"));
+        assert!(rendered.contains("wing_code|auth-migration|2026-04-11|code"));
+        assert!(rendered.contains(":: 0:???|"));
+        assert!(!rendered.contains("team"));
     }
 
     #[tokio::test]
@@ -1440,6 +1502,7 @@ mod tests {
                     wing: None,
                     identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
                     layer1: Layer1Config::default(),
+                    format: WakeUpFormat::PlainText,
                 },
             )
             .await
