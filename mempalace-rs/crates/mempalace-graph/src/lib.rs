@@ -1,13 +1,13 @@
 #![allow(missing_docs)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 
 use mempalace_core::{DrawerId, DrawerRecord};
 use mempalace_storage::{
     DrawerFilter, DrawerStore, EntityRecord, EntityRegistryStore, GraphDocument, GraphStore,
-    KnowledgeGraphFact, KnowledgeGraphStore, core::MempalaceError,
+    KnowledgeGraphFact, KnowledgeGraphStore, ToolStateStore, core::MempalaceError,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -18,7 +18,8 @@ pub use mempalace_storage as storage;
 
 const REGISTRY_SCHEMA_VERSION: u32 = 1;
 const PALACE_GRAPH_KEY: &str = "palace_graph:v1";
-const DEFAULT_ENTITY_READ_BYTES: usize = 5_000;
+const REGISTRY_MODE_CONFIG_KEY: &str = "entity_registry.mode";
+const DEFAULT_ENTITY_READ_CHARS: usize = 5_000;
 const PERSON_CONTEXT_PATTERNS: &[&str] = &[
     "{name} said",
     "{name} asked",
@@ -348,6 +349,8 @@ pub enum GraphError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("unknown entity `{name}`")]
+    UnknownEntity { name: String },
     #[error("serde error: {0}")]
     Serde(#[from] serde_json::Error),
 }
@@ -547,17 +550,18 @@ impl EntityRegistry {
         aliases: &BTreeMap<String, String>,
     ) -> Self {
         let mut entries = BTreeMap::<String, RegistryEntry>::new();
-        let reverse_aliases = aliases
-            .iter()
-            .map(|(alias, canonical)| (canonical.to_ascii_lowercase(), alias.clone()))
-            .collect::<BTreeMap<_, _>>();
+        let mut reverse_aliases = BTreeMap::<String, Vec<String>>::new();
+        for (alias, canonical) in aliases {
+            reverse_aliases.entry(canonical.to_ascii_lowercase()).or_default().push(alias.clone());
+        }
 
         for person in people {
             let canonical = person.name.trim().to_owned();
             if canonical.is_empty() {
                 continue;
             }
-            let alias = reverse_aliases.get(&canonical.to_ascii_lowercase()).cloned();
+            let aliases =
+                reverse_aliases.get(&canonical.to_ascii_lowercase()).cloned().unwrap_or_default();
             insert_registry_entry(
                 &mut entries,
                 RegistryEntry {
@@ -567,7 +571,7 @@ impl EntityRegistry {
                     entity_type: EntityKind::Person,
                     source: "onboarding".to_owned(),
                     contexts: vec![person.context.clone()],
-                    aliases: alias.clone().into_iter().collect(),
+                    aliases: aliases.clone(),
                     relationship: person.relationship.clone(),
                     confidence: 100,
                     ambiguous: COMMON_ENGLISH_WORDS
@@ -575,7 +579,7 @@ impl EntityRegistry {
                         .any(|word| word.eq_ignore_ascii_case(&canonical)),
                 },
             );
-            if let Some(alias) = alias {
+            for alias in aliases {
                 insert_registry_entry(
                     &mut entries,
                     RegistryEntry {
@@ -662,7 +666,7 @@ impl EntityRegistry {
 
     pub fn persist<S>(&self, store: &S, updated_at: OffsetDateTime) -> Result<()>
     where
-        S: EntityRegistryStore,
+        S: EntityRegistryStore + ToolStateStore,
     {
         for entry in &self.entries {
             let entity_id = entity_id(&entry.entity_type, &entry.name);
@@ -673,12 +677,16 @@ impl EntityRegistry {
                 updated_at,
             })?;
         }
+        store.put_config(&mempalace_storage::ConfigEntry {
+            config_key: REGISTRY_MODE_CONFIG_KEY.to_owned(),
+            config_value: self.mode.clone(),
+        })?;
         Ok(())
     }
 
     pub fn load<S>(store: &S) -> Result<Self>
     where
-        S: EntityRegistryStore,
+        S: EntityRegistryStore + ToolStateStore,
     {
         let mut entries = Vec::new();
         for entity in store.list_entities()? {
@@ -694,7 +702,11 @@ impl EntityRegistry {
                 .cmp(right.entity_type.as_str())
                 .then(left.name.cmp(&right.name))
         });
-        Ok(Self { mode: "personal".to_owned(), entries })
+        let mode = store
+            .get_config(REGISTRY_MODE_CONFIG_KEY)?
+            .map(|entry| entry.config_value)
+            .unwrap_or_else(|| "personal".to_owned());
+        Ok(Self { mode, entries })
     }
 }
 
@@ -744,7 +756,7 @@ pub fn detect_entities_in_files(
     for path in paths.iter().take(max_files) {
         let body = fs::read_to_string(path)
             .map_err(|source| GraphError::Io { path: path.clone(), source })?;
-        texts.push(body.chars().take(DEFAULT_ENTITY_READ_BYTES).collect());
+        texts.push(body.chars().take(DEFAULT_ENTITY_READ_CHARS).collect());
     }
     Ok(detect_entities_in_texts(&texts))
 }
@@ -864,7 +876,7 @@ pub fn traverse_graph(
     };
 
     let mut visited = BTreeSet::from([start_room.to_owned()]);
-    let mut frontier = vec![(start_room.to_owned(), 0usize)];
+    let mut frontier = VecDeque::from([(start_room.to_owned(), 0usize)]);
     let mut steps = vec![PalaceTraversalStep {
         room: start_room.to_owned(),
         wings: start.wings.clone(),
@@ -874,8 +886,7 @@ pub fn traverse_graph(
         connected_via: Vec::new(),
     }];
 
-    while let Some((current_room, depth)) = frontier.first().cloned() {
-        frontier.remove(0);
+    while let Some((current_room, depth)) = frontier.pop_front() {
         if depth >= max_hops {
             continue;
         }
@@ -905,7 +916,7 @@ pub fn traverse_graph(
                 hop: depth + 1,
                 connected_via: shared,
             });
-            frontier.push((room.clone(), depth + 1));
+            frontier.push_back((room.clone(), depth + 1));
         }
     }
 
@@ -1043,6 +1054,7 @@ where
     ) -> Result<Vec<KnowledgeQueryRow>> {
         let entity_id = self.resolve_entity_id(name)?;
         let entity_names = self.name_lookup()?;
+        let today = OffsetDateTime::now_utc().date();
         let display_name = entity_names
             .get(&entity_id)
             .cloned()
@@ -1071,7 +1083,7 @@ where
                         valid_to: fact.valid_to.map(format_date),
                         confidence: fact.confidence,
                         source_closet: None,
-                        current: fact.valid_to.is_none(),
+                        current: is_active_on(&fact, today),
                     });
                 }
                 if fact.object_entity_id == entity_id
@@ -1089,7 +1101,7 @@ where
                         valid_to: fact.valid_to.map(format_date),
                         confidence: fact.confidence,
                         source_closet: None,
-                        current: fact.valid_to.is_none(),
+                        current: is_active_on(&fact, today),
                     });
                 }
                 None
@@ -1108,6 +1120,7 @@ where
 
     pub fn timeline(&self, entity_name: Option<&str>) -> Result<Vec<KnowledgeTimelineRow>> {
         let entity_names = self.name_lookup()?;
+        let today = OffsetDateTime::now_utc().date();
         let facts = match entity_name {
             Some(name) => self.store.list_facts_for_entity(&self.resolve_entity_id(name)?)?,
             None => self.store.list_facts()?,
@@ -1127,7 +1140,7 @@ where
                     .unwrap_or_else(|| denormalize_entity_id(&fact.object_entity_id)),
                 valid_from: fact.valid_from.map(format_date),
                 valid_to: fact.valid_to.map(format_date),
-                current: fact.valid_to.is_none(),
+                current: is_active_on(&fact, today),
             })
             .collect::<Vec<_>>();
         rows.sort_by(|left, right| {
@@ -1145,8 +1158,9 @@ where
 
     pub fn stats(&self) -> Result<KnowledgeGraphStats> {
         let facts = self.store.list_facts()?;
-        let entities = self.store.list_entities()?.len();
-        let current = facts.iter().filter(|fact| fact.valid_to.is_none()).count();
+        let entities = canonical_entity_count(&self.store.list_entities()?);
+        let today = OffsetDateTime::now_utc().date();
+        let current = facts.iter().filter(|fact| is_active_on(fact, today)).count();
         let predicates = facts
             .iter()
             .map(|fact| fact.predicate.clone())
@@ -1220,7 +1234,7 @@ where
                 return Ok(entity.entity_id);
             }
         }
-        Ok(entity_id(&EntityKind::Unknown, name))
+        Err(GraphError::UnknownEntity { name: name.to_owned() })
     }
 
     fn find_registered_entity(
@@ -1256,6 +1270,18 @@ struct RoomAccumulator {
 
 fn insert_registry_entry(map: &mut BTreeMap<String, RegistryEntry>, entry: RegistryEntry) {
     map.insert(entry.name.to_ascii_lowercase(), entry);
+}
+
+fn canonical_entity_count(entities: &[EntityRecord]) -> usize {
+    entities
+        .iter()
+        .map(|entity| {
+            serde_json::from_value::<RegistryEntry>(entity.payload.clone())
+                .map(|entry| entity_id(&entry.entity_type, &entry.canonical_name))
+                .unwrap_or_else(|_| entity.entity_id.clone())
+        })
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 fn extract_candidates(text: &str) -> Vec<String> {
@@ -1472,7 +1498,6 @@ fn is_active_on(fact: &KnowledgeGraphFact, date: Date) -> bool {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use async_trait::async_trait;
-    use mempalace_storage::IngestManifestStore;
     use tempfile::tempdir;
     use time::macros::{date, datetime};
 
@@ -1518,6 +1543,42 @@ mod tests {
     }
 
     #[test]
+    fn registry_persists_mode_and_all_aliases() {
+        let tempdir = tempdir().unwrap();
+        let store =
+            mempalace_storage::SqliteOperationalStore::new(tempdir.path().join("state.sqlite3"));
+        store.ensure_schema().unwrap();
+
+        let registry = EntityRegistry::seed(
+            "work",
+            &[SeedPerson {
+                name: "Katherine".to_owned(),
+                relationship: Some("teammate".to_owned()),
+                context: "work".to_owned(),
+            }],
+            &[],
+            &BTreeMap::from([
+                (String::from("Kat"), String::from("Katherine")),
+                (String::from("Katie"), String::from("Katherine")),
+            ]),
+        );
+        registry.persist(&store, datetime!(2026-04-12 00:00:00 UTC)).unwrap();
+
+        let loaded = EntityRegistry::load(&store).unwrap();
+        let runtime = KnowledgeGraphRuntime::new(&store);
+        let stats = runtime.stats().unwrap();
+
+        assert_eq!(loaded.mode, "work");
+        assert_eq!(
+            loaded.entries.iter().find(|entry| entry.name == "Katherine").unwrap().aliases,
+            vec![String::from("Kat"), String::from("Katie")]
+        );
+        assert_eq!(runtime.resolve_entity_id("Kat").unwrap(), "person:katherine");
+        assert_eq!(runtime.resolve_entity_id("Katie").unwrap(), "person:katherine");
+        assert_eq!(stats.entities, 1);
+    }
+
+    #[test]
     fn derives_palace_graph_with_duplicate_safe_tunnels_and_traversal() {
         let drawers = vec![
             drawer(
@@ -1544,6 +1605,59 @@ mod tests {
         assert_eq!(snapshot.stats.total_edges, 2);
         assert_eq!(tunnels[0].room, "auth-migration");
         assert_eq!(traversal[1].room, "phase0-rollout");
+    }
+
+    #[test]
+    fn detects_entities_from_files() {
+        let tempdir = tempdir().unwrap();
+        let path = tempdir.path().join("notes.txt");
+        fs::write(
+            &path,
+            "Kai said we should ship MemPalace.\nKai wrote the patch.\nHi Kai.\nWe built MemPalace.\nMemPalace architecture is stable.\n",
+        )
+        .unwrap();
+
+        let report = detect_entities_in_files(&[path], 1).unwrap();
+
+        assert_eq!(report.people[0].name, "Kai");
+        assert_eq!(report.projects[0].name, "MemPalace");
+    }
+
+    #[test]
+    fn persists_and_loads_palace_graph() {
+        let tempdir = tempdir().unwrap();
+        let store =
+            mempalace_storage::SqliteOperationalStore::new(tempdir.path().join("state.sqlite3"));
+        store.ensure_schema().unwrap();
+
+        let snapshot = derive_palace_graph(&[
+            drawer("wing_code", "auth-migration", Some("hall_a"), Some(date!(2026 - 04 - 02))),
+            drawer("wing_team", "auth-migration", Some("hall_b"), Some(date!(2026 - 04 - 03))),
+        ]);
+        persist_palace_graph(&store, &snapshot, datetime!(2026-04-12 00:00:00 UTC)).unwrap();
+
+        assert_eq!(load_palace_graph(&store).unwrap(), Some(snapshot));
+    }
+
+    #[test]
+    fn finds_all_tunnels_when_no_filters_are_given() {
+        let snapshot = derive_palace_graph(&[
+            drawer("wing_code", "auth-migration", Some("hall_a"), Some(date!(2026 - 04 - 02))),
+            drawer("wing_team", "auth-migration", Some("hall_b"), Some(date!(2026 - 04 - 03))),
+            drawer("project_alpha", "backend", None, None),
+            drawer("strategy_convos", "launch-plan", None, None),
+        ]);
+
+        let tunnels = find_tunnels(&snapshot, None, None);
+
+        assert_eq!(tunnels.len(), snapshot.tunnels.len());
+        assert_eq!(tunnels[0].room, "auth-migration");
+    }
+
+    #[test]
+    fn traversal_returns_empty_for_unknown_room() {
+        let snapshot = derive_palace_graph(&[drawer("wing_code", "auth-migration", None, None)]);
+        assert!(traverse_graph(&snapshot, "missing-room", 2).is_empty());
     }
 
     #[test]
@@ -1610,6 +1724,46 @@ mod tests {
     }
 
     #[test]
+    fn future_dated_facts_are_not_marked_current() {
+        let tempdir = tempdir().unwrap();
+        let store =
+            mempalace_storage::SqliteOperationalStore::new(tempdir.path().join("state.sqlite3"));
+        store.ensure_schema().unwrap();
+        let runtime = KnowledgeGraphRuntime::new(&store);
+        let today = OffsetDateTime::now_utc().date();
+        let tomorrow = today.next_day().unwrap();
+
+        runtime
+            .add_fact(
+                AddFactRequest {
+                    subject: "Rust Rewrite".to_owned(),
+                    subject_type: EntityKind::Project,
+                    predicate: "starts".to_owned(),
+                    object: "Phase 7".to_owned(),
+                    object_type: EntityKind::Concept,
+                    valid_from: Some(tomorrow),
+                    valid_to: None,
+                    confidence: 1.0,
+                    source_drawer_id: None,
+                    source_file: None,
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .unwrap();
+
+        let query = runtime.query_entity("Rust Rewrite", None, QueryDirection::Outgoing).unwrap();
+        let timeline = runtime.timeline(None).unwrap();
+        let stats = runtime.stats().unwrap();
+
+        assert_eq!(query.len(), 1);
+        assert!(!query[0].current);
+        assert_eq!(timeline.len(), 1);
+        assert!(!timeline[0].current);
+        assert_eq!(stats.current_facts, 0);
+        assert_eq!(stats.expired_facts, 1);
+    }
+
+    #[test]
     fn knowledge_graph_uses_canonical_entity_ids_for_aliases() {
         let tempdir = tempdir().unwrap();
         let store =
@@ -1654,6 +1808,72 @@ mod tests {
         let query = runtime.query_entity("Kat", None, QueryDirection::Outgoing).unwrap();
         assert_eq!(query.len(), 1);
         assert_eq!(query[0].subject, "Katherine");
+    }
+
+    #[test]
+    fn querying_unknown_entities_returns_error() {
+        let tempdir = tempdir().unwrap();
+        let store =
+            mempalace_storage::SqliteOperationalStore::new(tempdir.path().join("state.sqlite3"));
+        store.ensure_schema().unwrap();
+        let runtime = KnowledgeGraphRuntime::new(&store);
+
+        let err = runtime.query_entity("Missing", None, QueryDirection::Outgoing).unwrap_err();
+        assert!(matches!(err, GraphError::UnknownEntity { .. }));
+    }
+
+    #[test]
+    fn global_timeline_is_limited_to_one_hundred_rows() {
+        let tempdir = tempdir().unwrap();
+        let store =
+            mempalace_storage::SqliteOperationalStore::new(tempdir.path().join("state.sqlite3"));
+        store.ensure_schema().unwrap();
+        let runtime = KnowledgeGraphRuntime::new(&store);
+
+        for index in 0..101 {
+            runtime
+                .add_fact(
+                    AddFactRequest {
+                        subject: format!("Project {index:03}"),
+                        subject_type: EntityKind::Project,
+                        predicate: "references".to_owned(),
+                        object: format!("Concept {index:03}"),
+                        object_type: EntityKind::Concept,
+                        valid_from: Some(date!(2026 - 04 - 01)),
+                        valid_to: None,
+                        confidence: 1.0,
+                        source_drawer_id: None,
+                        source_file: None,
+                    },
+                    datetime!(2026-04-01 09:00:00 UTC),
+                )
+                .unwrap();
+        }
+
+        let rows = runtime.timeline(None).unwrap();
+
+        assert_eq!(rows.len(), 100);
+        assert_eq!(rows[0].subject, "Project 000");
+    }
+
+    #[test]
+    fn stats_handles_empty_store() {
+        let tempdir = tempdir().unwrap();
+        let store =
+            mempalace_storage::SqliteOperationalStore::new(tempdir.path().join("state.sqlite3"));
+        store.ensure_schema().unwrap();
+        let runtime = KnowledgeGraphRuntime::new(&store);
+
+        assert_eq!(
+            runtime.stats().unwrap(),
+            KnowledgeGraphStats {
+                entities: 0,
+                triples: 0,
+                current_facts: 0,
+                expired_facts: 0,
+                relationship_types: Vec::new(),
+            }
+        );
     }
 
     #[tokio::test]

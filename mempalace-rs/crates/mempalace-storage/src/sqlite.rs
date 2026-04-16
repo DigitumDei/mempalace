@@ -655,7 +655,6 @@ impl KnowledgeGraphStore for SqliteOperationalStore {
                  confidence = excluded.confidence,
                  source_drawer_id = excluded.source_drawer_id,
                  source_file = excluded.source_file,
-                 created_at = excluded.created_at,
                  updated_at = excluded.updated_at",
             params![
                 fact.fact_id,
@@ -725,7 +724,8 @@ impl KnowledgeGraphStore for SqliteOperationalStore {
              WHERE subject_entity_id = ?1
                AND predicate = ?2
                AND object_entity_id = ?3
-               AND valid_to IS NULL",
+               AND valid_to IS NULL
+               AND (valid_from IS NULL OR valid_from <= ?4)",
             params![
                 subject_entity_id,
                 predicate,
@@ -1138,6 +1138,42 @@ mod tests {
             store.get_fact("fact-1").unwrap().unwrap().valid_to,
             Some(date!(2026 - 04 - 04))
         );
+    }
+
+    #[test]
+    fn does_not_invalidate_future_dated_facts() {
+        let tempdir = tempdir().unwrap();
+        let store = SqliteOperationalStore::new(tempdir.path().join("storage.sqlite3"));
+        store.ensure_schema().unwrap();
+
+        store
+            .upsert_fact(&KnowledgeGraphFact {
+                fact_id: "fact-future".to_owned(),
+                subject_entity_id: "project:rust_rewrite".to_owned(),
+                predicate: "starts".to_owned(),
+                object_entity_id: "concept:phase_7".to_owned(),
+                valid_from: Some(date!(2026 - 04 - 05)),
+                valid_to: None,
+                confidence: 1.0,
+                source_drawer_id: None,
+                source_file: None,
+                created_at: datetime!(2026-04-03 09:00:00 UTC),
+                updated_at: datetime!(2026-04-03 09:00:00 UTC),
+            })
+            .unwrap();
+
+        let invalidated = store
+            .invalidate_active_fact(
+                "project:rust_rewrite",
+                "starts",
+                "concept:phase_7",
+                date!(2026 - 04 - 04),
+                datetime!(2026-04-04 00:00:00 UTC),
+            )
+            .unwrap();
+
+        assert_eq!(invalidated, 0);
+        assert_eq!(store.get_fact("fact-future").unwrap().unwrap().valid_to, None);
     }
 
     #[test]
