@@ -262,7 +262,8 @@ where
         let identity = request.identity.render()?;
         match request.format {
             WakeUpFormat::PlainText => {
-                let story = generate_layer1(store, request.wing.clone(), request.layer1.clone()).await?;
+                let story =
+                    generate_layer1(store, request.wing.clone(), request.layer1.clone()).await?;
                 Ok(format!("{identity}\n\n{story}"))
             }
             WakeUpFormat::AaaK => {
@@ -529,8 +530,8 @@ struct RankedMatch {
 mod tests {
     use super::{
         IdentitySource, Layer1Config, LayerRetrieveRequest, SearchError, SearchRuntime,
-        WakeUpFormat, WakeUpRequest, default_identity_path, generate_layer1,
-        render_search_results, trim_similarity,
+        WakeUpFormat, WakeUpRequest, default_identity_path, generate_layer1, render_search_results,
+        trim_similarity,
     };
     use async_trait::async_trait;
     use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
@@ -1294,6 +1295,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wake_up_defaults_to_plain_text_format() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+        let identity = IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned());
+
+        let default_rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest { identity: identity.clone(), ..WakeUpRequest::default() },
+            )
+            .await
+            .unwrap();
+        let explicit_rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: None,
+                    identity,
+                    layer1: Layer1Config::default(),
+                    format: WakeUpFormat::PlainText,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(default_rendered, explicit_rendered);
+        assert!(default_rendered.contains("## L1 — ESSENTIAL STORY"));
+    }
+
+    #[tokio::test]
     async fn wake_up_applies_wing_filter_end_to_end() {
         let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
         let store = sample_store();
@@ -1340,7 +1371,51 @@ mod tests {
         assert!(rendered.contains("## L1 — AAAK STORY"));
         assert!(rendered.contains("wing_code|auth-migration|2026-04-11|code"));
         assert!(rendered.contains(":: 0:???|"));
-        assert!(!rendered.contains("team"));
+        assert!(!rendered.contains("wing_team|"));
+    }
+
+    #[tokio::test]
+    async fn wake_up_supports_aaak_truncation_without_orphan_room_headers() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = StubStore {
+            drawers: vec![
+                record(
+                    "wing_code/alpha/0001",
+                    "wing_code",
+                    "alpha",
+                    "fixtures/alpha.txt",
+                    "Tiny note.",
+                    Some(10.0),
+                    datetime!(2026-04-11 09:45:00 UTC),
+                ),
+                record(
+                    "wing_code/beta/0002",
+                    "wing_code",
+                    "beta",
+                    "fixtures/beta.txt",
+                    "Second room should truncate before its first entry lands in the wake-up output.",
+                    Some(9.0),
+                    datetime!(2026-04-11 09:30:00 UTC),
+                ),
+            ],
+        };
+
+        let rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: Some(WingId::new("wing_code").unwrap()),
+                    identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+                    layer1: Layer1Config { max_drawers: 2, max_chars: 70 },
+                    format: WakeUpFormat::AaaK,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(rendered.contains("[alpha]"));
+        assert!(rendered.contains("... (more in L3 search)"));
+        assert!(!rendered.contains("[beta]"));
     }
 
     #[tokio::test]

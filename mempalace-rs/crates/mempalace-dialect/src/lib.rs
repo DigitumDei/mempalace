@@ -104,17 +104,17 @@ const FLAG_SIGNALS: &[(&str, &str)] = &[
 
 const STOP_WORDS: &[&str] = &[
     "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
-    "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall", "can",
-    "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "about",
-    "between", "through", "during", "before", "after", "above", "below", "up", "down", "out",
-    "off", "over", "under", "again", "further", "then", "once", "here", "there", "when",
-    "where", "why", "how", "all", "each", "every", "both", "few", "more", "most", "other",
-    "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very",
-    "just", "don", "now", "and", "but", "or", "if", "while", "that", "this", "these", "those",
-    "it", "its", "i", "we", "you", "he", "she", "they", "me", "him", "her", "us", "them", "my",
-    "your", "his", "our", "their", "what", "which", "who", "whom", "also", "much", "many",
-    "like", "because", "since", "get", "got", "use", "used", "using", "make", "made", "thing",
-    "things", "way", "well", "really", "want", "need",
+    "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall", "can", "to",
+    "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "about", "between",
+    "through", "during", "before", "after", "above", "below", "up", "down", "out", "off", "over",
+    "under", "again", "further", "then", "once", "here", "there", "when", "where", "why", "how",
+    "all", "each", "every", "both", "few", "more", "most", "other", "some", "such", "no", "nor",
+    "not", "only", "own", "same", "so", "than", "too", "very", "just", "don", "now", "and", "but",
+    "or", "if", "while", "that", "this", "these", "those", "it", "its", "i", "we", "you", "he",
+    "she", "they", "me", "him", "her", "us", "them", "my", "your", "his", "our", "their", "what",
+    "which", "who", "whom", "also", "much", "many", "like", "because", "since", "get", "got",
+    "use", "used", "using", "make", "made", "thing", "things", "way", "well", "really", "want",
+    "need",
 ];
 
 static DATE_FORMAT: &[FormatItem<'static>] = format_description!("[year]-[month]-[day]");
@@ -191,10 +191,9 @@ impl Dialect {
     {
         let mut dialect = Self::new();
         for (name, code) in entities {
-            let name = name.as_ref();
+            let name = name.as_ref().to_lowercase();
             let code = code.as_ref().to_owned();
-            dialect.entity_codes.insert(name.to_owned(), code.clone());
-            dialect.entity_codes.insert(name.to_lowercase(), code);
+            dialect.entity_codes.insert(name, code);
         }
         dialect
     }
@@ -210,18 +209,10 @@ impl Dialect {
 
     pub fn compress(&self, text: &str, metadata: &SourceMetadata<'_>) -> String {
         let entities = self.detect_entities(text);
-        let entity_str = if entities.is_empty() {
-            "???".to_owned()
-        } else {
-            entities.join("+")
-        };
+        let entity_str = if entities.is_empty() { "???".to_owned() } else { entities.join("+") };
 
         let topics = self.extract_topics(text);
-        let topic_str = if topics.is_empty() {
-            "misc".to_owned()
-        } else {
-            topics.join("_")
-        };
+        let topic_str = if topics.is_empty() { "misc".to_owned() } else { topics.join("_") };
 
         let quote = self.extract_key_sentence(text);
         let emotions = self.detect_emotions(text);
@@ -229,11 +220,12 @@ impl Dialect {
 
         let mut lines = Vec::new();
         if metadata.source_file.is_some() || metadata.wing.is_some() {
+            let source = source_stem(metadata.source_file.unwrap_or("?"));
             let header = [
                 metadata.wing.unwrap_or("?"),
                 metadata.room.unwrap_or("?"),
                 metadata.date.unwrap_or("?"),
-                source_stem(metadata.source_file.unwrap_or("?")),
+                source.as_str(),
             ]
             .join("|");
             lines.push(header);
@@ -241,7 +233,7 @@ impl Dialect {
 
         let mut parts = vec![format!("0:{entity_str}"), topic_str];
         if !quote.is_empty() {
-            parts.push(format!("\"{quote}\""));
+            parts.push(format!("\"{}\"", sanitize_aaak_field(&quote)));
         }
         if !emotions.is_empty() {
             parts.push(emotions.join("+"));
@@ -347,14 +339,14 @@ impl Dialect {
         let mut found = Vec::new();
 
         for (name, code) in &self.entity_codes {
-            if self.skip_names.iter().any(|skip| name.to_lowercase().contains(skip)) {
+            if self.skip_names.iter().any(|skip| name.contains(skip)) {
                 continue;
             }
-            if !name.chars().all(|ch| !ch.is_ascii_uppercase())
-                && text_lower.contains(&name.to_lowercase())
-                && !found.contains(code)
-            {
+            if text_lower.contains(name) && !found.contains(code) {
                 found.push(code.clone());
+                if found.len() >= ENTITY_LIMIT {
+                    break;
+                }
             }
         }
         if !found.is_empty() {
@@ -485,11 +477,10 @@ impl Dialect {
             })
             .collect::<Vec<_>>();
 
-        scored.sort_by(|left, right| {
-            right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1))
-        });
+        scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
 
-        let mut best = scored.into_iter().next().map(|(_, _, sentence)| sentence).unwrap_or_default();
+        let mut best =
+            scored.into_iter().next().map(|(_, _, sentence)| sentence).unwrap_or_default();
         if char_count(&best) > QUOTE_LIMIT {
             best = truncate_chars(&best, QUOTE_LIMIT.saturating_sub(3));
             best.push_str("...");
@@ -509,13 +500,7 @@ fn order_drawers(drawers: &mut [DrawerRecord]) {
             .or(right.emotional_weight)
             .or(right.weight)
             .unwrap_or(3.0)
-            .partial_cmp(
-                &left
-                    .importance
-                    .or(left.emotional_weight)
-                    .or(left.weight)
-                    .unwrap_or(3.0),
-            )
+            .partial_cmp(&left.importance.or(left.emotional_weight).or(left.weight).unwrap_or(3.0))
             .unwrap_or(Ordering::Equal)
             .then_with(|| left.room.as_str().cmp(right.room.as_str()))
             .then_with(|| compare_option_dates(right.date, left.date))
@@ -588,6 +573,10 @@ fn collapse_whitespace(text: &str) -> String {
 
 fn truncate_chars(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
+}
+
+fn sanitize_aaak_field(text: &str) -> String {
+    text.replace('|', "/").replace('"', "'")
 }
 
 fn char_count(text: &str) -> usize {
@@ -691,7 +680,8 @@ mod tests {
 
     #[test]
     fn compress_matches_phase0_fixture() {
-        let fixture = fs::read_to_string(fixture_path("tests/fixtures/phase0/goldens/aaak.json")).unwrap();
+        let fixture =
+            fs::read_to_string(fixture_path("tests/fixtures/phase0/goldens/aaak.json")).unwrap();
         let expected: Value = serde_json::from_str(&fixture).unwrap();
         let source = expected.get("source").and_then(Value::as_str).unwrap();
         let rendered = expected.get("rendered").and_then(Value::as_str).unwrap();
@@ -712,11 +702,15 @@ mod tests {
         assert_eq!(
             dialect.compression_stats(source, &compressed),
             CompressionStats {
-                original_tokens: stats.get("original_tokens").and_then(Value::as_u64).unwrap() as usize,
-                compressed_tokens: stats.get("compressed_tokens").and_then(Value::as_u64).unwrap() as usize,
+                original_tokens: stats.get("original_tokens").and_then(Value::as_u64).unwrap()
+                    as usize,
+                compressed_tokens: stats.get("compressed_tokens").and_then(Value::as_u64).unwrap()
+                    as usize,
                 ratio: stats.get("ratio").and_then(Value::as_f64).unwrap(),
-                original_chars: stats.get("original_chars").and_then(Value::as_u64).unwrap() as usize,
-                compressed_chars: stats.get("compressed_chars").and_then(Value::as_u64).unwrap() as usize,
+                original_chars: stats.get("original_chars").and_then(Value::as_u64).unwrap()
+                    as usize,
+                compressed_chars: stats.get("compressed_chars").and_then(Value::as_u64).unwrap()
+                    as usize,
             }
         );
     }
@@ -725,8 +719,12 @@ mod tests {
     fn compress_is_deterministic_across_repeated_runs() {
         let dialect = Dialect::new();
         let text = "We decided to keep the CLI stable because drift would make parity impossible.";
-        let metadata =
-            SourceMetadata { source_file: Some("notes.md"), wing: Some("wing_code"), room: Some("planning"), date: Some("2026-04-11") };
+        let metadata = SourceMetadata {
+            source_file: Some("notes.md"),
+            wing: Some("wing_code"),
+            room: Some("planning"),
+            date: Some("2026-04-11"),
+        };
 
         let first = dialect.compress(text, &metadata);
         let second = dialect.compress(text, &metadata);
@@ -739,12 +737,53 @@ mod tests {
     #[test]
     fn compress_truncates_long_quotes_and_preserves_budget_signal() {
         let dialect = Dialect::new();
-        let original = "We decided to preserve the search formatting because the exact output is the only trustworthy product contract while the storage layer changes underneath and every fixture must stay reproducible for CI review.";
-        let compressed = dialect.compress(original, &SourceMetadata::default());
+        let original = "We decided to preserve the search formatting because the exact output is the only trustworthy product contract while the storage layer changes underneath and every fixture must stay reproducible for CI review. ".repeat(64);
+        let compressed = dialect.compress(&original, &SourceMetadata::default());
 
         assert!(compressed.contains("...\"|") || compressed.ends_with("...\""));
-        assert!(count_tokens(&compressed) < count_tokens(original));
+        assert!(count_tokens(&compressed) <= 64);
+        assert!(count_tokens(&compressed) < count_tokens(&original));
         assert!(compressed.lines().count() == 1);
+    }
+
+    #[test]
+    fn compress_sanitizes_quotes_and_pipes() {
+        let dialect = Dialect::new();
+        let compressed = dialect.compress(
+            "We decided \"quoted | structured\" output should stay readable.",
+            &SourceMetadata::default(),
+        );
+
+        assert!(compressed.contains("'quoted / structured'"));
+        assert!(!compressed.contains("\"quoted | structured\""));
+    }
+
+    #[test]
+    fn compress_uses_registered_entities_case_insensitively_and_caps_output() {
+        let dialect = Dialect::with_entities([
+            ("alice", "ALC"),
+            ("github", "GIT"),
+            ("postgres", "PGS"),
+            ("tokio", "TOK"),
+        ]);
+        let compressed = dialect.compress(
+            "alice paired GitHub with Postgres while tokio handled the runtime.",
+            &SourceMetadata::default(),
+        );
+        let entity_field = compressed.split('|').next().unwrap();
+
+        assert_eq!(entity_field, "0:ALC+GIT+PGS");
+    }
+
+    #[test]
+    fn compress_respects_skip_names_for_registered_entities() {
+        let dialect = Dialect::with_entities([("alice", "ALC"), ("github", "GIT")])
+            .with_skip_names(["github"]);
+        let compressed = dialect
+            .compress("alice kept GitHub in the release checklist.", &SourceMetadata::default());
+
+        assert!(compressed.starts_with("0:ALC|"));
+        assert!(!compressed.contains("GIT"));
     }
 
     #[test]
@@ -761,20 +800,41 @@ mod tests {
         let backend_index = rendered.find("[backend]").unwrap();
         assert!(auth_index < backend_index);
         assert!(rendered.contains("wing_team|auth-migration|2026-04-11|team"));
-        assert!(rendered.contains("0:???"));
+        assert!(rendered.contains("\"The team decided the auth migration must preserve CLI...\""));
     }
 
     #[test]
     fn render_wake_up_aaak_truncates_without_emitting_orphan_room_headers() {
         let dialect = Dialect::new();
+        let drawers = vec![
+            sample_record(
+                "wing_code/alpha/0001",
+                "wing_code",
+                "alpha",
+                "fixtures/alpha.txt",
+                "Tiny note.",
+                Some(10.0),
+                datetime!(2026-04-11 09:45:00 UTC),
+            ),
+            sample_record(
+                "wing_code/beta/0002",
+                "wing_code",
+                "beta",
+                "fixtures/beta.txt",
+                "Second room should truncate before its first entry lands in the wake-up output.",
+                Some(9.0),
+                datetime!(2026-04-11 09:30:00 UTC),
+            ),
+        ];
         let rendered = dialect.render_wake_up_aaak(
             "## L0 — IDENTITY\nReady.",
-            &sample_drawers(),
-            &WakeUpAaaKConfig { max_drawers: 3, max_chars: 135 },
+            &drawers,
+            &WakeUpAaaKConfig { max_drawers: 2, max_chars: 70 },
         );
 
+        assert!(rendered.contains("[alpha]"));
         assert!(rendered.contains("... (more in L3 search)"));
-        assert!(!rendered.ends_with("[backend]"));
+        assert!(!rendered.contains("[beta]"));
     }
 
     #[test]
@@ -785,9 +845,6 @@ mod tests {
             dialect.reverse_parsing_support(),
             ReverseParsingSupport::DeferredForV1 { .. }
         ));
-        assert!(matches!(
-            dialect.decode("0:ALC|misc"),
-            Err(ParseError::DeferredForV1 { .. })
-        ));
+        assert!(matches!(dialect.decode("0:ALC|misc"), Err(ParseError::DeferredForV1 { .. })));
     }
 }
