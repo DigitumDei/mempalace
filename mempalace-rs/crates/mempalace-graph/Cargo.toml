@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+aho-corasick = "1.1.4"
 mempalace-core = { path = "../mempalace-core" }
 mempalace-storage = { path = "../mempalace-storage" }
 serde.workspace = true

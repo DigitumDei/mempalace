@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use time::OffsetDateTime;
 
 use crate::error::{Result, StorageError};
@@ -119,6 +119,13 @@ CREATE INDEX IF NOT EXISTS idx_kg_facts_predicate ON knowledge_graph_facts(predi
 CREATE INDEX IF NOT EXISTS idx_kg_facts_validity ON knowledge_graph_facts(valid_from, valid_to);
         "#,
     ),
+    (
+        "0004_knowledge_graph_fact_lookup_index",
+        r#"
+CREATE INDEX IF NOT EXISTS idx_kg_facts_subject_predicate_object_active
+ON knowledge_graph_facts(subject_entity_id, predicate, object_entity_id, valid_to);
+        "#,
+    ),
 ];
 
 pub trait IngestManifestStore {
@@ -150,6 +157,7 @@ pub trait EntityRegistryStore {
     fn upsert_entity(&self, entity: &EntityRecord) -> Result<()>;
     fn get_entity(&self, entity_id: &str) -> Result<Option<EntityRecord>>;
     fn list_entities(&self) -> Result<Vec<EntityRecord>>;
+    fn list_entities_by_ids(&self, entity_ids: &[String]) -> Result<Vec<EntityRecord>>;
 }
 
 pub trait GraphStore {
@@ -161,7 +169,14 @@ pub trait KnowledgeGraphStore {
     fn upsert_fact(&self, fact: &KnowledgeGraphFact) -> Result<()>;
     fn get_fact(&self, fact_id: &str) -> Result<Option<KnowledgeGraphFact>>;
     fn list_facts(&self) -> Result<Vec<KnowledgeGraphFact>>;
+    fn list_facts_limited(&self, limit: usize) -> Result<Vec<KnowledgeGraphFact>>;
     fn list_facts_for_entity(&self, entity_id: &str) -> Result<Vec<KnowledgeGraphFact>>;
+    fn find_active_fact(
+        &self,
+        subject_entity_id: &str,
+        predicate: &str,
+        object_entity_id: &str,
+    ) -> Result<Option<KnowledgeGraphFact>>;
     fn invalidate_active_fact(
         &self,
         subject_entity_id: &str,
@@ -190,7 +205,12 @@ impl SqliteOperationalStore {
     }
 
     pub fn migration_names() -> &'static [&'static str] {
-        &["0001_initial_storage", "0002_ingest_files_source_key", "0003_knowledge_graph_facts"]
+        &[
+            "0001_initial_storage",
+            "0002_ingest_files_source_key",
+            "0003_knowledge_graph_facts",
+            "0004_knowledge_graph_fact_lookup_index",
+        ]
     }
 
     pub fn path(&self) -> &Path {
@@ -583,6 +603,46 @@ impl EntityRegistryStore for SqliteOperationalStore {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(StorageError::from)
     }
+
+    fn list_entities_by_ids(&self, entity_ids: &[String]) -> Result<Vec<EntityRecord>> {
+        if entity_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let connection = self.open_connection()?;
+        let placeholders =
+            std::iter::repeat_n("?", entity_ids.len()).collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT entity_id, entity_type, payload_json, updated_at
+             FROM entity_registry
+             WHERE entity_id IN ({placeholders})
+             ORDER BY entity_type ASC, entity_id ASC"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        statement
+            .query_map(params_from_iter(entity_ids.iter()), |row| {
+                Ok(EntityRecord {
+                    entity_id: row.get(0)?,
+                    entity_type: row.get(1)?,
+                    payload: serde_json::from_str(&row.get::<_, String>(2)?).map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(err),
+                        )
+                    })?,
+                    updated_at: decode_time(row.get(3)?).map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(err),
+                        )
+                    })?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
+    }
 }
 
 impl GraphStore for SqliteOperationalStore {
@@ -698,6 +758,17 @@ impl KnowledgeGraphStore for SqliteOperationalStore {
         )
     }
 
+    fn list_facts_limited(&self, limit: usize) -> Result<Vec<KnowledgeGraphFact>> {
+        self.list_facts_matching(
+            "SELECT fact_id, subject_entity_id, predicate, object_entity_id, valid_from,
+                    valid_to, confidence, source_drawer_id, source_file, created_at, updated_at
+             FROM knowledge_graph_facts
+             ORDER BY COALESCE(valid_from, '9999-12-31') ASC, predicate ASC, fact_id ASC
+             LIMIT ?1",
+            [limit as i64],
+        )
+    }
+
     fn list_facts_for_entity(&self, entity_id: &str) -> Result<Vec<KnowledgeGraphFact>> {
         self.list_facts_matching(
             "SELECT fact_id, subject_entity_id, predicate, object_entity_id, valid_from,
@@ -707,6 +778,31 @@ impl KnowledgeGraphStore for SqliteOperationalStore {
              ORDER BY COALESCE(valid_from, '9999-12-31') ASC, predicate ASC, fact_id ASC",
             [entity_id],
         )
+    }
+
+    fn find_active_fact(
+        &self,
+        subject_entity_id: &str,
+        predicate: &str,
+        object_entity_id: &str,
+    ) -> Result<Option<KnowledgeGraphFact>> {
+        let connection = self.open_connection()?;
+        connection
+            .query_row(
+                "SELECT fact_id, subject_entity_id, predicate, object_entity_id, valid_from,
+                        valid_to, confidence, source_drawer_id, source_file, created_at, updated_at
+                 FROM knowledge_graph_facts
+                 WHERE subject_entity_id = ?1
+                   AND predicate = ?2
+                   AND object_entity_id = ?3
+                   AND valid_to IS NULL
+                 ORDER BY COALESCE(valid_from, '9999-12-31') ASC, fact_id ASC
+                 LIMIT 1",
+                params![subject_entity_id, predicate, object_entity_id],
+                decode_fact_row,
+            )
+            .optional()
+            .map_err(StorageError::from)
     }
 
     fn invalidate_active_fact(
@@ -1096,6 +1192,7 @@ mod tests {
             json!({ "rooms": ["backend"] })
         );
         assert_eq!(store.list_entities().unwrap().len(), 1);
+        assert_eq!(store.list_entities_by_ids(&[String::from("person:kai")]).unwrap().len(), 1);
     }
 
     #[test]
@@ -1123,6 +1220,15 @@ mod tests {
         let stored = store.get_fact("fact-1").unwrap().unwrap();
         assert_eq!(stored.predicate, "targets");
         assert_eq!(store.list_facts_for_entity("project:rust_rewrite").unwrap().len(), 1);
+        assert_eq!(
+            store
+                .find_active_fact("project:rust_rewrite", "targets", "project:phase_1")
+                .unwrap()
+                .unwrap()
+                .fact_id,
+            "fact-1"
+        );
+        assert_eq!(store.list_facts_limited(1).unwrap().len(), 1);
 
         let invalidated = store
             .invalidate_active_fact(
@@ -1174,6 +1280,28 @@ mod tests {
 
         assert_eq!(invalidated, 0);
         assert_eq!(store.get_fact("fact-future").unwrap().unwrap().valid_to, None);
+    }
+
+    #[test]
+    fn creates_composite_lookup_index_for_knowledge_graph_facts() {
+        let tempdir = tempdir().unwrap();
+        let store = SqliteOperationalStore::new(tempdir.path().join("storage.sqlite3"));
+        store.ensure_schema().unwrap();
+
+        let connection = rusqlite::Connection::open(store.path()).unwrap();
+        let exists = connection
+            .query_row(
+                "SELECT 1 FROM sqlite_master
+                 WHERE type = 'index'
+                   AND name = 'idx_kg_facts_subject_predicate_object_active'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()
+            .unwrap()
+            .is_some();
+
+        assert!(exists);
     }
 
     #[test]

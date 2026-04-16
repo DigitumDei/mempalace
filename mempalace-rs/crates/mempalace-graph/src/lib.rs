@@ -1,9 +1,11 @@
 #![allow(missing_docs)]
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::PathBuf;
 
+use aho_corasick::AhoCorasick;
 use mempalace_core::{DrawerId, DrawerRecord};
 use mempalace_storage::{
     DrawerFilter, DrawerStore, EntityRecord, EntityRegistryStore, GraphDocument, GraphStore,
@@ -713,6 +715,8 @@ impl EntityRegistry {
 pub fn detect_entities_in_texts(texts: &[String]) -> EntityDetectionReport {
     let combined = texts.join("\n");
     let lines = combined.lines().map(str::to_owned).collect::<Vec<_>>();
+    let lower_combined = format!(" {} ", combined.to_ascii_lowercase());
+    let lower_lines = lines.iter().map(|line| line.to_ascii_lowercase()).collect::<Vec<_>>();
     let mut counts = BTreeMap::<String, usize>::new();
 
     for token in extract_candidates(&combined) {
@@ -727,7 +731,7 @@ pub fn detect_entities_in_texts(texts: &[String]) -> EntityDetectionReport {
         if frequency < 3 {
             continue;
         }
-        let candidate = classify_candidate(&name, frequency, &combined, &lines);
+        let candidate = classify_candidate(&name, frequency, &lower_combined, &lower_lines);
         match candidate.entity_type {
             EntityKind::Person => people.push(candidate),
             EntityKind::Project => projects.push(candidate),
@@ -754,9 +758,7 @@ pub fn detect_entities_in_files(
 ) -> Result<EntityDetectionReport> {
     let mut texts = Vec::new();
     for path in paths.iter().take(max_files) {
-        let body = fs::read_to_string(path)
-            .map_err(|source| GraphError::Io { path: path.clone(), source })?;
-        texts.push(body.chars().take(DEFAULT_ENTITY_READ_CHARS).collect());
+        texts.push(read_text_prefix(path)?);
     }
     Ok(detect_entities_in_texts(&texts))
 }
@@ -989,14 +991,7 @@ where
         let object_id = self.ensure_entity(&request.object, request.object_type.clone(), now)?;
         let predicate = canonicalize_label(&request.predicate);
 
-        if let Some(existing) =
-            self.store.list_facts_for_entity(&subject_id)?.into_iter().find(|fact| {
-                fact.subject_entity_id == subject_id
-                    && fact.object_entity_id == object_id
-                    && fact.predicate == predicate
-                    && fact.valid_to.is_none()
-            })
-        {
+        if let Some(existing) = self.store.find_active_fact(&subject_id, &predicate, &object_id)? {
             return Ok(existing.fact_id);
         }
 
@@ -1053,15 +1048,14 @@ where
         direction: QueryDirection,
     ) -> Result<Vec<KnowledgeQueryRow>> {
         let entity_id = self.resolve_entity_id(name)?;
-        let entity_names = self.name_lookup()?;
+        let facts = self.store.list_facts_for_entity(&entity_id)?;
+        let entity_names = self.name_lookup_for_fact_ids(&facts, Some(entity_id.clone()))?;
         let today = OffsetDateTime::now_utc().date();
         let display_name = entity_names
             .get(&entity_id)
             .cloned()
             .unwrap_or_else(|| denormalize_entity_id(&entity_id));
-        let mut rows = self
-            .store
-            .list_facts_for_entity(&entity_id)?
+        let mut rows = facts
             .into_iter()
             .filter(|fact| match as_of {
                 Some(date) => is_active_on(fact, date),
@@ -1119,12 +1113,13 @@ where
     }
 
     pub fn timeline(&self, entity_name: Option<&str>) -> Result<Vec<KnowledgeTimelineRow>> {
-        let entity_names = self.name_lookup()?;
         let today = OffsetDateTime::now_utc().date();
-        let facts = match entity_name {
-            Some(name) => self.store.list_facts_for_entity(&self.resolve_entity_id(name)?)?,
-            None => self.store.list_facts()?,
+        let anchor_entity_id = entity_name.map(|name| self.resolve_entity_id(name)).transpose()?;
+        let facts = match &anchor_entity_id {
+            Some(entity_id) => self.store.list_facts_for_entity(entity_id)?,
+            None => self.store.list_facts_limited(100)?,
         };
+        let entity_names = self.name_lookup_for_fact_ids(&facts, anchor_entity_id)?;
 
         let mut rows = facts
             .into_iter()
@@ -1153,9 +1148,6 @@ where
                 .then(left.subject.cmp(&right.subject))
                 .then(left.object.cmp(&right.object))
         });
-        if entity_name.is_none() {
-            rows.truncate(100);
-        }
         Ok(rows)
     }
 
@@ -1213,9 +1205,22 @@ where
         Ok(entity_id)
     }
 
-    fn name_lookup(&self) -> Result<BTreeMap<String, String>> {
+    fn name_lookup_for_fact_ids(
+        &self,
+        facts: &[KnowledgeGraphFact],
+        anchor_entity_id: Option<String>,
+    ) -> Result<BTreeMap<String, String>> {
+        let mut entity_ids = facts
+            .iter()
+            .flat_map(|fact| [fact.subject_entity_id.clone(), fact.object_entity_id.clone()])
+            .collect::<BTreeSet<_>>();
+        if let Some(entity_id) = anchor_entity_id {
+            entity_ids.insert(entity_id);
+        }
+
         let mut names = BTreeMap::new();
-        for entity in self.store.list_entities()? {
+        let entity_ids = entity_ids.into_iter().collect::<Vec<_>>();
+        for entity in self.store.list_entities_by_ids(&entity_ids)? {
             if let Ok(entry) = serde_json::from_value::<RegistryEntry>(entity.payload) {
                 names.insert(entity.entity_id, entry.canonical_name);
             }
@@ -1320,30 +1325,18 @@ fn extract_candidates(text: &str) -> Vec<String> {
 fn classify_candidate(
     name: &str,
     frequency: usize,
-    text: &str,
-    lines: &[String],
+    lower_text: &str,
+    lower_lines: &[String],
 ) -> EntityCandidate {
-    let lower_text = format!(" {} ", text.to_ascii_lowercase());
     let lower_name = name.to_ascii_lowercase();
-    let mut person_score = 0usize;
-    let mut project_score = 0usize;
-    let mut person_signals = Vec::new();
-    let mut project_signals = Vec::new();
-
-    for pattern in PERSON_CONTEXT_PATTERNS {
-        let count = lower_text.matches(&pattern.replace("{name}", &lower_name)).count();
-        if count > 0 {
-            person_score += count * 2;
-            person_signals.push(format!("person context ({count}x)"));
-        }
-    }
-    for pattern in PROJECT_CONTEXT_PATTERNS {
-        let count = lower_text.matches(&pattern.replace("{name}", &lower_name)).count();
-        if count > 0 {
-            project_score += count * 2;
-            project_signals.push(format!("project context ({count}x)"));
-        }
-    }
+    let (mut person_score, mut person_signals) =
+        score_context_patterns(PERSON_CONTEXT_PATTERNS, &lower_name, lower_text, "person context");
+    let (mut project_score, mut project_signals) = score_context_patterns(
+        PROJECT_CONTEXT_PATTERNS,
+        &lower_name,
+        lower_text,
+        "project context",
+    );
     if lower_text.contains(&format!(" {}.py", lower_name))
         || lower_text.contains(&format!(" import {}", lower_name))
         || lower_text.contains(&format!(" {}-core", lower_name))
@@ -1353,15 +1346,15 @@ fn classify_candidate(
     }
 
     let mut pronoun_hits = 0usize;
-    for (index, line) in lines.iter().enumerate() {
-        if !line.to_ascii_lowercase().contains(&lower_name) {
+    for (index, line) in lower_lines.iter().enumerate() {
+        if !line.contains(&lower_name) {
             continue;
         }
-        let window = lines
+        let window = lower_lines
             .iter()
             .skip(index.saturating_sub(2))
             .take(5)
-            .map(|line| line.to_ascii_lowercase())
+            .cloned()
             .collect::<Vec<_>>()
             .join(" ");
         if PRONOUN_PATTERNS.iter().any(|pronoun| window.contains(pronoun)) {
@@ -1403,6 +1396,61 @@ fn classify_candidate(
     signals.truncate(3);
 
     EntityCandidate { name: name.to_owned(), entity_type, confidence, frequency, signals }
+}
+
+fn read_text_prefix(path: &PathBuf) -> Result<String> {
+    let max_bytes = (DEFAULT_ENTITY_READ_CHARS.saturating_mul(4)) as u64;
+    let mut file =
+        File::open(path).map_err(|source| GraphError::Io { path: path.clone(), source })?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(max_bytes)
+        .read_to_end(&mut bytes)
+        .map_err(|source| GraphError::Io { path: path.clone(), source })?;
+
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(err) => {
+            let valid_up_to = err.utf8_error().valid_up_to();
+            String::from_utf8_lossy(&err.into_bytes()[..valid_up_to]).into_owned()
+        }
+    };
+
+    Ok(text.chars().take(DEFAULT_ENTITY_READ_CHARS).collect())
+}
+
+fn score_context_patterns(
+    patterns: &[&str],
+    lower_name: &str,
+    lower_text: &str,
+    signal_label: &str,
+) -> (usize, Vec<String>) {
+    let compiled =
+        patterns.iter().map(|pattern| pattern.replace("{name}", lower_name)).collect::<Vec<_>>();
+    let counts = count_pattern_occurrences(&compiled, lower_text);
+    let total = counts.iter().sum::<usize>() * 2;
+    let signals = counts
+        .into_iter()
+        .filter(|count| *count > 0)
+        .map(|count| format!("{signal_label} ({count}x)"))
+        .collect::<Vec<_>>();
+    (total, signals)
+}
+
+fn count_pattern_occurrences(patterns: &[String], haystack: &str) -> Vec<usize> {
+    if patterns.is_empty() {
+        return Vec::new();
+    }
+
+    let Ok(automaton) = AhoCorasick::new(patterns) else {
+        return vec![0; patterns.len()];
+    };
+
+    let mut counts = vec![0; patterns.len()];
+    for mat in automaton.find_iter(haystack) {
+        counts[mat.pattern().as_usize()] += 1;
+    }
+    counts
 }
 
 fn signal_categories(signals: &[String]) -> usize {
@@ -1500,6 +1548,8 @@ fn is_active_on(fact: &KnowledgeGraphFact, date: Date) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::fs;
+
     use async_trait::async_trait;
     use mempalace_storage::IngestManifestStore;
     use tempfile::tempdir;
