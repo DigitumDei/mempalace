@@ -1128,19 +1128,22 @@ where
 
         let mut rows = facts
             .into_iter()
-            .map(|fact| KnowledgeTimelineRow {
-                subject: entity_names
-                    .get(&fact.subject_entity_id)
-                    .cloned()
-                    .unwrap_or_else(|| denormalize_entity_id(&fact.subject_entity_id)),
-                predicate: fact.predicate,
-                object: entity_names
-                    .get(&fact.object_entity_id)
-                    .cloned()
-                    .unwrap_or_else(|| denormalize_entity_id(&fact.object_entity_id)),
-                valid_from: fact.valid_from.map(format_date),
-                valid_to: fact.valid_to.map(format_date),
-                current: is_active_on(&fact, today),
+            .map(|fact| {
+                let current = is_active_on(&fact, today);
+                KnowledgeTimelineRow {
+                    subject: entity_names
+                        .get(&fact.subject_entity_id)
+                        .cloned()
+                        .unwrap_or_else(|| denormalize_entity_id(&fact.subject_entity_id)),
+                    predicate: fact.predicate,
+                    object: entity_names
+                        .get(&fact.object_entity_id)
+                        .cloned()
+                        .unwrap_or_else(|| denormalize_entity_id(&fact.object_entity_id)),
+                    valid_from: fact.valid_from.map(format_date),
+                    valid_to: fact.valid_to.map(format_date),
+                    current,
+                }
             })
             .collect::<Vec<_>>();
         rows.sort_by(|left, right| {
@@ -1498,6 +1501,7 @@ fn is_active_on(fact: &KnowledgeGraphFact, date: Date) -> bool {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use async_trait::async_trait;
+    use mempalace_storage::IngestManifestStore;
     use tempfile::tempdir;
     use time::macros::{date, datetime};
 
