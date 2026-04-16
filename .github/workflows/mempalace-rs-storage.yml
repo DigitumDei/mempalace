@@ -17,6 +17,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   embeddings-tests:
@@ -28,7 +29,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -59,7 +60,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -114,7 +115,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install protobuf compiler
         run: |
@@ -144,7 +145,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install protobuf compiler
         run: |
@@ -164,3 +165,33 @@ jobs:
 
       - name: Run mempalace-ingest tests
         run: cargo test -p mempalace-ingest --locked -- --nocapture
+
+  graph-tests:
+    name: Graph Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mempalace-rs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mempalace-rs -> target
+
+      - name: Build mempalace-graph tests
+        run: cargo test -p mempalace-graph --locked --no-run
+
+      - name: Run mempalace-graph tests
+        run: cargo test -p mempalace-graph --locked -- --nocapture
