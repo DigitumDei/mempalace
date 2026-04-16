@@ -3746,6 +3746,7 @@ dependencies = [
 name = "mempalace-graph"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "async-trait",
  "mempalace-core",
  "mempalace-storage",
