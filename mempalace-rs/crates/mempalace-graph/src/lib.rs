@@ -1043,6 +1043,10 @@ where
     ) -> Result<Vec<KnowledgeQueryRow>> {
         let entity_id = self.resolve_entity_id(name)?;
         let entity_names = self.name_lookup()?;
+        let display_name = entity_names
+            .get(&entity_id)
+            .cloned()
+            .unwrap_or_else(|| denormalize_entity_id(&entity_id));
         let mut rows = self
             .store
             .list_facts_for_entity(&entity_id)?
@@ -1057,7 +1061,7 @@ where
                 {
                     return Some(KnowledgeQueryRow {
                         direction: "outgoing".to_owned(),
-                        subject: name.to_owned(),
+                        subject: display_name.clone(),
                         predicate: fact.predicate.clone(),
                         object: entity_names
                             .get(&fact.object_entity_id)
@@ -1080,7 +1084,7 @@ where
                             .cloned()
                             .unwrap_or_else(|| denormalize_entity_id(&fact.subject_entity_id)),
                         predicate: fact.predicate.clone(),
-                        object: name.to_owned(),
+                        object: display_name.clone(),
                         valid_from: fact.valid_from.map(format_date),
                         valid_to: fact.valid_to.map(format_date),
                         confidence: fact.confidence,
@@ -1164,6 +1168,10 @@ where
         entity_type: EntityKind,
         updated_at: OffsetDateTime,
     ) -> Result<String> {
+        if let Some(existing) = self.find_registered_entity(name, Some(&entity_type))? {
+            return Ok(existing);
+        }
+
         let entity_id = entity_id(&entity_type, name);
         if self.store.get_entity(&entity_id)?.is_none() {
             let entry = RegistryEntry {
@@ -1199,21 +1207,42 @@ where
     }
 
     fn resolve_entity_id(&self, name: &str) -> Result<String> {
+        if let Some(entity_id) = self.find_registered_entity(name, None)? {
+            return Ok(entity_id);
+        }
+
         let canonical = canonicalize_label(name);
         let entities = self.store.list_entities()?;
         for entity in entities {
-            if let Ok(entry) = serde_json::from_value::<RegistryEntry>(entity.payload.clone()) {
-                if entry.name.eq_ignore_ascii_case(name)
-                    || entry.canonical_name.eq_ignore_ascii_case(name)
-                    || entry.aliases.iter().any(|alias| alias.eq_ignore_ascii_case(name))
-                {
-                    return Ok(entity.entity_id);
-                }
-            } else if entity.entity_id.ends_with(&canonical) {
+            if serde_json::from_value::<RegistryEntry>(entity.payload.clone()).is_err()
+                && entity.entity_id.ends_with(&canonical)
+            {
                 return Ok(entity.entity_id);
             }
         }
         Ok(entity_id(&EntityKind::Unknown, name))
+    }
+
+    fn find_registered_entity(
+        &self,
+        name: &str,
+        expected_type: Option<&EntityKind>,
+    ) -> Result<Option<String>> {
+        for entity in self.store.list_entities()? {
+            let Ok(entry) = serde_json::from_value::<RegistryEntry>(entity.payload) else {
+                continue;
+            };
+            if expected_type.is_some_and(|kind| &entry.entity_type != kind) {
+                continue;
+            }
+            if entry.name.eq_ignore_ascii_case(name)
+                || entry.canonical_name.eq_ignore_ascii_case(name)
+                || entry.aliases.iter().any(|alias| alias.eq_ignore_ascii_case(name))
+            {
+                return Ok(Some(entity_id(&entry.entity_type, &entry.canonical_name)));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -1578,6 +1607,53 @@ mod tests {
         assert_eq!(timeline.len(), 2);
         assert_eq!(stats.current_facts, 1);
         assert_eq!(stats.expired_facts, 1);
+    }
+
+    #[test]
+    fn knowledge_graph_uses_canonical_entity_ids_for_aliases() {
+        let tempdir = tempdir().unwrap();
+        let store =
+            mempalace_storage::SqliteOperationalStore::new(tempdir.path().join("state.sqlite3"));
+        store.ensure_schema().unwrap();
+
+        let registry = EntityRegistry::seed(
+            "personal",
+            &[SeedPerson {
+                name: "Katherine".to_owned(),
+                relationship: Some("teammate".to_owned()),
+                context: "work".to_owned(),
+            }],
+            &[],
+            &BTreeMap::from([(String::from("Kat"), String::from("Katherine"))]),
+        );
+        registry.persist(&store, datetime!(2026-04-12 00:00:00 UTC)).unwrap();
+
+        let runtime = KnowledgeGraphRuntime::new(&store);
+        runtime
+            .add_fact(
+                AddFactRequest {
+                    subject: "Kat".to_owned(),
+                    subject_type: EntityKind::Person,
+                    predicate: "supports".to_owned(),
+                    object: "MemPalace".to_owned(),
+                    object_type: EntityKind::Project,
+                    valid_from: Some(date!(2026 - 04 - 12)),
+                    valid_to: None,
+                    confidence: 0.9,
+                    source_drawer_id: None,
+                    source_file: None,
+                },
+                datetime!(2026-04-12 09:00:00 UTC),
+            )
+            .unwrap();
+
+        let facts = store.list_facts().unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].subject_entity_id, "person:katherine");
+
+        let query = runtime.query_entity("Kat", None, QueryDirection::Outgoing).unwrap();
+        assert_eq!(query.len(), 1);
+        assert_eq!(query[0].subject, "Katherine");
     }
 
     #[tokio::test]
