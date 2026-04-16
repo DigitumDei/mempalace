@@ -140,6 +140,60 @@ impl LanceDrawerStore {
         };
         Ok(count)
     }
+
+    async fn execute_search(
+        &self,
+        table: &lancedb::Table,
+        request: &SearchRequest,
+        limit: usize,
+    ) -> Result<Vec<DrawerMatch>> {
+        let mut query = table.vector_search(request.embedding.clone())?.limit(limit);
+
+        let filter = compile_filter(&request.filter);
+        if !filter.is_empty() {
+            query = query.only_if(filter);
+        }
+
+        let stream = query.execute().await?;
+        let batches = stream.try_collect::<Vec<_>>().await?;
+        matches_from_batches(&batches)
+    }
+
+    async fn search_drawers_with_cutoff_ties(
+        &self,
+        table: &lancedb::Table,
+        request: &SearchRequest,
+    ) -> Result<Vec<DrawerMatch>> {
+        let mut fetch_limit = request.limit;
+
+        loop {
+            let mut matches = self.execute_search(table, request, fetch_limit).await?;
+            if matches.len() < fetch_limit {
+                truncate_to_cutoff_ties(&mut matches, request.limit);
+                return Ok(matches);
+            }
+
+            let Some(cutoff_distance) =
+                matches.get(request.limit - 1).and_then(|entry| entry.distance)
+            else {
+                return Ok(matches);
+            };
+            let Some(last_distance) = matches.last().and_then(|entry| entry.distance) else {
+                return Ok(matches);
+            };
+
+            if last_distance.total_cmp(&cutoff_distance).is_gt() {
+                truncate_to_cutoff_ties(&mut matches, request.limit);
+                return Ok(matches);
+            }
+
+            let next_limit = fetch_limit.saturating_mul(2);
+            if next_limit == fetch_limit {
+                return Ok(matches);
+            }
+            fetch_limit = next_limit;
+        }
+    }
 }
 
 #[async_trait]
@@ -240,17 +294,16 @@ impl DrawerStore for LanceDrawerStore {
             )));
         }
 
-        let table = self.table().await?;
-        let mut query = table.vector_search(request.embedding.clone())?.limit(request.limit);
-
-        let filter = compile_filter(&request.filter);
-        if !filter.is_empty() {
-            query = query.only_if(filter);
+        if request.limit == 0 {
+            return Ok(Vec::new());
         }
 
-        let stream = query.execute().await?;
-        let batches = stream.try_collect::<Vec<_>>().await?;
-        matches_from_batches(&batches)
+        let table = self.table().await?;
+        if request.include_cutoff_ties {
+            self.search_drawers_with_cutoff_ties(&table, request).await
+        } else {
+            self.execute_search(&table, request, request.limit).await
+        }
     }
 
     async fn list_drawers(&self, filter: &DrawerFilter) -> Result<Vec<DrawerRecord>> {
@@ -506,6 +559,20 @@ fn matches_from_batches(batches: &[RecordBatch]) -> Result<Vec<DrawerMatch>> {
         .collect())
 }
 
+fn truncate_to_cutoff_ties(matches: &mut Vec<DrawerMatch>, limit: usize) {
+    if limit == 0 || matches.len() <= limit {
+        return;
+    }
+
+    let Some(cutoff_distance) = matches.get(limit - 1).and_then(|entry| entry.distance) else {
+        return;
+    };
+    let cutoff_len = matches.partition_point(|entry| {
+        entry.distance.is_some_and(|distance| distance.total_cmp(&cutoff_distance).is_le())
+    });
+    matches.truncate(cutoff_len);
+}
+
 fn date_to_days(date: Date) -> i32 {
     date.to_julian_day()
         - Date::from_calendar_date(1970, time::Month::January, 1).unwrap().to_julian_day()
@@ -666,6 +733,7 @@ mod tests {
             .search_drawers(&SearchRequest {
                 embedding: embedding([1.0, 0.0, 0.0, 0.0]),
                 limit: 2,
+                include_cutoff_ties: false,
                 filter: DrawerFilter {
                     room: Some(RoomId::new("backend").unwrap()),
                     ..DrawerFilter::default()
@@ -676,6 +744,55 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].record.room.as_str(), "backend");
+    }
+
+    #[tokio::test]
+    async fn vector_search_can_include_full_cutoff_tie_group() {
+        let tempdir = tempdir().unwrap();
+        let store = LanceDrawerStore::new(tempdir.path().join("lance"), EmbeddingProfile::Balanced);
+        store.ensure_schema().await.unwrap();
+        store
+            .put_drawers(
+                &[
+                    record(
+                        "project_alpha/general/0001",
+                        "project_alpha",
+                        "general",
+                        "alpha.txt",
+                        [1.0, 0.0, 0.0, 0.0],
+                    ),
+                    record(
+                        "project_beta/general/0001",
+                        "project_beta",
+                        "general",
+                        "beta.txt",
+                        [1.0, 0.0, 0.0, 0.0],
+                    ),
+                    record(
+                        "project_gamma/general/0001",
+                        "project_gamma",
+                        "general",
+                        "gamma.txt",
+                        [0.0, 1.0, 0.0, 0.0],
+                    ),
+                ],
+                DuplicateStrategy::Error,
+            )
+            .await
+            .unwrap();
+
+        let results = store
+            .search_drawers(&SearchRequest {
+                embedding: embedding([1.0, 0.0, 0.0, 0.0]),
+                limit: 1,
+                include_cutoff_ties: true,
+                filter: DrawerFilter::default(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|entry| entry.distance == Some(0.0)));
     }
 
     #[tokio::test]

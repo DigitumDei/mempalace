@@ -34,6 +34,7 @@ pub struct DrawerFilter {
 pub struct SearchRequest {
     pub embedding: Vec<f32>,
     pub limit: usize,
+    pub include_cutoff_ties: bool,
     pub filter: DrawerFilter,
 }
 

@@ -19,7 +19,6 @@ const DEFAULT_LAYER1_MAX_DRAWERS: usize = 15;
 const DEFAULT_LAYER1_MAX_CHARS: usize = 3_200;
 const LAYER1_SNIPPET_LIMIT: usize = 200;
 const LAYER2_SNIPPET_LIMIT: usize = 300;
-const SEARCH_OVERFETCH_MARGIN: usize = 32;
 
 pub type Result<T> = std::result::Result<T, SearchError>;
 
@@ -161,12 +160,11 @@ where
             room: query.room.clone(),
             ..DrawerFilter::default()
         };
-        let search_limit = query.limit.saturating_add(SEARCH_OVERFETCH_MARGIN);
-
         let matches = store
             .search_drawers(&SearchRequest {
                 embedding: query_embedding,
-                limit: search_limit,
+                limit: query.limit,
+                include_cutoff_ties: true,
                 filter,
             })
             .await?;
@@ -638,7 +636,15 @@ mod tests {
             filtered.sort_by(|left, right| {
                 left.distance.partial_cmp(&right.distance).unwrap_or(std::cmp::Ordering::Equal)
             });
-            filtered.truncate(request.limit);
+            if request.limit == 0 {
+                filtered.clear();
+            } else if request.include_cutoff_ties && filtered.len() > request.limit {
+                let cutoff = filtered[request.limit - 1].distance;
+                let cutoff_len = filtered.partition_point(|entry| entry.distance <= cutoff);
+                filtered.truncate(cutoff_len);
+            } else {
+                filtered.truncate(request.limit);
+            }
             Ok(filtered)
         }
 
@@ -711,6 +717,7 @@ mod tests {
         drawers: Vec<DrawerRecord>,
         list_calls: Arc<Mutex<usize>>,
         search_limits: Arc<Mutex<Vec<usize>>>,
+        include_cutoff_ties: Arc<Mutex<Vec<bool>>>,
     }
 
     #[async_trait]
@@ -740,6 +747,7 @@ mod tests {
             request: &SearchRequest,
         ) -> Result<Vec<DrawerMatch>, StorageError> {
             self.search_limits.lock().unwrap().push(request.limit);
+            self.include_cutoff_ties.lock().unwrap().push(request.include_cutoff_ties);
 
             let mut filtered = self
                 .drawers
@@ -755,7 +763,15 @@ mod tests {
             filtered.sort_by(|left, right| {
                 left.distance.partial_cmp(&right.distance).unwrap_or(std::cmp::Ordering::Equal)
             });
-            filtered.truncate(request.limit);
+            if request.limit == 0 {
+                filtered.clear();
+            } else if request.include_cutoff_ties && filtered.len() > request.limit {
+                let cutoff = filtered[request.limit - 1].distance;
+                let cutoff_len = filtered.partition_point(|entry| entry.distance <= cutoff);
+                filtered.truncate(cutoff_len);
+            } else {
+                filtered.truncate(request.limit);
+            }
             Ok(filtered)
         }
 
@@ -934,47 +950,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_overfetches_candidates_before_truncating_top_k() {
+    async fn search_requests_full_cutoff_tie_group_before_truncating_top_k() {
         let store = StubStore {
-            drawers: vec![
-                record(
-                    "wing_b/general/0001",
-                    "wing_b",
-                    "general",
-                    "zeta.txt",
-                    "B",
-                    Some(0.5),
-                    datetime!(2026-04-11 09:00:00 UTC),
-                ),
-                record(
-                    "wing_a/general/0001",
-                    "wing_a",
-                    "general",
-                    "alpha.txt",
-                    "A",
-                    Some(0.5),
-                    datetime!(2026-04-11 09:00:00 UTC),
-                ),
-            ],
+            drawers: (0..40)
+                .rev()
+                .map(|index| {
+                    record(
+                        &format!("wing_{index:02}/general/0001"),
+                        &format!("wing_{index:02}"),
+                        "general",
+                        &format!("file-{index:02}.txt"),
+                        &format!("payload-{index:02}"),
+                        Some(0.5),
+                        datetime!(2026-04-11 09:00:00 UTC),
+                    )
+                })
+                .collect(),
         };
         let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
         let query = SearchQuery {
             text: "tie".to_owned(),
             wing: None,
             room: None,
-            limit: 1,
+            limit: 3,
             profile: EmbeddingProfile::Balanced,
         };
 
         let results = runtime.search(&store, &query).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].wing.as_str(), "wing_a");
+        assert_eq!(results.len(), 3);
+        assert_eq!(
+            results.iter().map(|entry| entry.wing.as_str()).collect::<Vec<_>>(),
+            vec!["wing_00", "wing_01", "wing_02"]
+        );
     }
 
     #[tokio::test]
-    async fn search_uses_bounded_vector_overfetch_without_listing_drawers() {
+    async fn search_requests_cutoff_ties_without_listing_drawers() {
         let list_calls = Arc::new(Mutex::new(0usize));
         let search_limits = Arc::new(Mutex::new(Vec::new()));
+        let include_cutoff_ties = Arc::new(Mutex::new(Vec::new()));
         let store = SearchSpyStore {
             drawers: vec![
                 record(
@@ -998,6 +1012,7 @@ mod tests {
             ],
             list_calls: Arc::clone(&list_calls),
             search_limits: Arc::clone(&search_limits),
+            include_cutoff_ties: Arc::clone(&include_cutoff_ties),
         };
         let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
 
@@ -1017,7 +1032,8 @@ mod tests {
 
         assert_eq!(results[0].wing.as_str(), "wing_a");
         assert_eq!(*list_calls.lock().unwrap(), 0);
-        assert_eq!(search_limits.lock().unwrap().as_slice(), &[1 + super::SEARCH_OVERFETCH_MARGIN]);
+        assert_eq!(search_limits.lock().unwrap().as_slice(), &[1]);
+        assert_eq!(include_cutoff_ties.lock().unwrap().as_slice(), &[true]);
     }
 
     #[tokio::test]
