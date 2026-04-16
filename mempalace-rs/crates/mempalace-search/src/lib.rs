@@ -337,7 +337,7 @@ where
     }
 
     let mut lines = vec!["## L1 — ESSENTIAL STORY".to_owned()];
-    let mut total_chars = char_count(&lines[0]);
+    let mut total_chars = 0;
 
     for (room, records) in grouped {
         let room_line = format!("\n[{room}]");
@@ -1359,14 +1359,37 @@ mod tests {
             )],
         };
         let entry = "  - éééééééééééééééééééé  (cafe.txt)";
-        let max_chars = super::char_count("## L1 — ESSENTIAL STORY")
-            + super::char_count("\n[cafe]")
-            + super::char_count(entry);
+        let max_chars = super::char_count("\n[cafe]") + super::char_count(entry);
 
         let rendered = generate_layer1(&store, None, Layer1Config { max_drawers: 1, max_chars })
             .await
             .unwrap();
 
+        assert!(rendered.contains(entry));
+        assert!(!rendered.contains("... (more in L3 search)"));
+    }
+
+    #[tokio::test]
+    async fn generate_layer1_does_not_count_header_against_budget() {
+        let store = StubStore {
+            drawers: vec![record(
+                "wing_team/cafe/0001",
+                "wing_team",
+                "cafe",
+                "fixtures/cafe.txt",
+                "header budget parity",
+                Some(0.9),
+                datetime!(2026-04-11 09:00:00 UTC),
+            )],
+        };
+        let entry = "  - header budget parity  (cafe.txt)";
+        let max_chars = super::char_count("\n[cafe]") + super::char_count(entry);
+
+        let rendered = generate_layer1(&store, None, Layer1Config { max_drawers: 1, max_chars })
+            .await
+            .unwrap();
+
+        assert!(rendered.contains("## L1 — ESSENTIAL STORY"));
         assert!(rendered.contains(entry));
         assert!(!rendered.contains("... (more in L3 search)"));
     }
@@ -1395,8 +1418,7 @@ mod tests {
                 ),
             ],
         };
-        let max_chars =
-            super::char_count("## L1 — ESSENTIAL STORY\n\n[alpha]\n  - alpha entry  (alpha.txt)");
+        let max_chars = super::char_count("\n[alpha]\n  - alpha entry  (alpha.txt)");
 
         let rendered = generate_layer1(&store, None, Layer1Config { max_drawers: 2, max_chars })
             .await
@@ -1431,8 +1453,7 @@ mod tests {
                 ),
             ],
         };
-        let max_chars = super::char_count("## L1 — ESSENTIAL STORY")
-            + super::char_count("\n[alpha]")
+        let max_chars = super::char_count("\n[alpha]")
             + super::char_count("  - first alpha entry  (alpha-1.txt)");
 
         let rendered = generate_layer1(&store, None, Layer1Config { max_drawers: 2, max_chars })
