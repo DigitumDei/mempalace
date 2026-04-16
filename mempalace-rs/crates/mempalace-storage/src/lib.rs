@@ -10,12 +10,14 @@ pub use engine::StorageEngine;
 pub use error::{Result, StorageError};
 pub use lance::LanceDrawerStore;
 pub use sqlite::{
-    EntityRegistryStore, GraphStore, IngestManifestStore, SqliteOperationalStore, ToolStateStore,
+    EntityRegistryStore, GraphStore, IngestManifestStore, KnowledgeGraphStore,
+    SqliteOperationalStore, ToolStateStore,
 };
 pub use types::{
     ConfigEntry, DrawerFilter, DrawerMatch, DrawerStore, DuplicateStrategy, EntityRecord,
     GraphDocument, IngestCommitRequest, IngestFileRecord, IngestManifestEntry, IngestRun,
-    IngestRunStatus, RetryableRun, SearchRequest, StorageLayout, ToolStateEntry,
+    IngestRunStatus, KnowledgeGraphFact, RetryableRun, SearchRequest, StorageLayout,
+    ToolStateEntry,
 };
 
 pub use mempalace_core as core;

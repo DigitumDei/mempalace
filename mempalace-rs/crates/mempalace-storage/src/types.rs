@@ -2,10 +2,12 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
+use time::{Date, OffsetDateTime};
 
 use crate::error::Result;
 use mempalace_core::{DrawerId, DrawerRecord, RoomId, WingId};
+
+time::serde::format_description!(date_only, Date, "[year]-[month]-[day]");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageLayout {
@@ -127,6 +129,23 @@ pub struct EntityRecord {
 pub struct GraphDocument {
     pub graph_key: String,
     pub payload: serde_json::Value,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KnowledgeGraphFact {
+    pub fact_id: String,
+    pub subject_entity_id: String,
+    pub predicate: String,
+    pub object_entity_id: String,
+    #[serde(with = "date_only::option", default)]
+    pub valid_from: Option<Date>,
+    #[serde(with = "date_only::option", default)]
+    pub valid_to: Option<Date>,
+    pub confidence: f32,
+    pub source_drawer_id: Option<DrawerId>,
+    pub source_file: Option<String>,
+    pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
 

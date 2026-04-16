@@ -1,14 +1,15 @@
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use time::OffsetDateTime;
 
 use crate::error::{Result, StorageError};
 use crate::types::{
     ConfigEntry, EntityRecord, GraphDocument, IngestFileRecord, IngestManifestEntry, IngestRun,
-    IngestRunStatus, RetryableRun, ToolStateEntry,
+    IngestRunStatus, KnowledgeGraphFact, RetryableRun, ToolStateEntry,
 };
 use mempalace_core::DrawerId;
+use time::Date;
 
 const MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -95,6 +96,29 @@ FROM ingest_files_old;
 DROP TABLE ingest_files_old;
         "#,
     ),
+    (
+        "0003_knowledge_graph_facts",
+        r#"
+CREATE TABLE IF NOT EXISTS knowledge_graph_facts (
+    fact_id TEXT PRIMARY KEY,
+    subject_entity_id TEXT NOT NULL,
+    predicate TEXT NOT NULL,
+    object_entity_id TEXT NOT NULL,
+    valid_from TEXT,
+    valid_to TEXT,
+    confidence REAL NOT NULL,
+    source_drawer_id TEXT,
+    source_file TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_kg_facts_subject ON knowledge_graph_facts(subject_entity_id);
+CREATE INDEX IF NOT EXISTS idx_kg_facts_object ON knowledge_graph_facts(object_entity_id);
+CREATE INDEX IF NOT EXISTS idx_kg_facts_predicate ON knowledge_graph_facts(predicate);
+CREATE INDEX IF NOT EXISTS idx_kg_facts_validity ON knowledge_graph_facts(valid_from, valid_to);
+        "#,
+    ),
 ];
 
 pub trait IngestManifestStore {
@@ -125,11 +149,27 @@ pub trait IngestManifestStore {
 pub trait EntityRegistryStore {
     fn upsert_entity(&self, entity: &EntityRecord) -> Result<()>;
     fn get_entity(&self, entity_id: &str) -> Result<Option<EntityRecord>>;
+    fn list_entities(&self) -> Result<Vec<EntityRecord>>;
 }
 
 pub trait GraphStore {
     fn put_graph_document(&self, graph: &GraphDocument) -> Result<()>;
     fn get_graph_document(&self, graph_key: &str) -> Result<Option<GraphDocument>>;
+}
+
+pub trait KnowledgeGraphStore {
+    fn upsert_fact(&self, fact: &KnowledgeGraphFact) -> Result<()>;
+    fn get_fact(&self, fact_id: &str) -> Result<Option<KnowledgeGraphFact>>;
+    fn list_facts(&self) -> Result<Vec<KnowledgeGraphFact>>;
+    fn list_facts_for_entity(&self, entity_id: &str) -> Result<Vec<KnowledgeGraphFact>>;
+    fn invalidate_active_fact(
+        &self,
+        subject_entity_id: &str,
+        predicate: &str,
+        object_entity_id: &str,
+        ended_at: Date,
+        updated_at: OffsetDateTime,
+    ) -> Result<usize>;
 }
 
 pub trait ToolStateStore {
@@ -150,7 +190,7 @@ impl SqliteOperationalStore {
     }
 
     pub fn migration_names() -> &'static [&'static str] {
-        &["0001_initial_storage", "0002_ingest_files_source_key"]
+        &["0001_initial_storage", "0002_ingest_files_source_key", "0003_knowledge_graph_facts"]
     }
 
     pub fn path(&self) -> &Path {
@@ -511,6 +551,38 @@ impl EntityRegistryStore for SqliteOperationalStore {
             .optional()
             .map_err(StorageError::from)
     }
+
+    fn list_entities(&self) -> Result<Vec<EntityRecord>> {
+        let connection = self.open_connection()?;
+        let mut statement = connection.prepare(
+            "SELECT entity_id, entity_type, payload_json, updated_at
+             FROM entity_registry
+             ORDER BY entity_type ASC, entity_id ASC",
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok(EntityRecord {
+                    entity_id: row.get(0)?,
+                    entity_type: row.get(1)?,
+                    payload: serde_json::from_str(&row.get::<_, String>(2)?).map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(err),
+                        )
+                    })?,
+                    updated_at: decode_time(row.get(3)?).map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(err),
+                        )
+                    })?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
+    }
 }
 
 impl GraphStore for SqliteOperationalStore {
@@ -562,6 +634,107 @@ impl GraphStore for SqliteOperationalStore {
             )
             .optional()
             .map_err(StorageError::from)
+    }
+}
+
+impl KnowledgeGraphStore for SqliteOperationalStore {
+    fn upsert_fact(&self, fact: &KnowledgeGraphFact) -> Result<()> {
+        let connection = self.open_connection()?;
+        connection.execute(
+            "INSERT INTO knowledge_graph_facts (
+                 fact_id, subject_entity_id, predicate, object_entity_id, valid_from, valid_to,
+                 confidence, source_drawer_id, source_file, created_at, updated_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(fact_id) DO UPDATE SET
+                 subject_entity_id = excluded.subject_entity_id,
+                 predicate = excluded.predicate,
+                 object_entity_id = excluded.object_entity_id,
+                 valid_from = excluded.valid_from,
+                 valid_to = excluded.valid_to,
+                 confidence = excluded.confidence,
+                 source_drawer_id = excluded.source_drawer_id,
+                 source_file = excluded.source_file,
+                 created_at = excluded.created_at,
+                 updated_at = excluded.updated_at",
+            params![
+                fact.fact_id,
+                fact.subject_entity_id,
+                fact.predicate,
+                fact.object_entity_id,
+                encode_optional_date(fact.valid_from),
+                encode_optional_date(fact.valid_to),
+                fact.confidence,
+                fact.source_drawer_id.as_ref().map(DrawerId::as_str),
+                fact.source_file,
+                encode_time(fact.created_at),
+                encode_time(fact.updated_at),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get_fact(&self, fact_id: &str) -> Result<Option<KnowledgeGraphFact>> {
+        let connection = self.open_connection()?;
+        connection
+            .query_row(
+                "SELECT fact_id, subject_entity_id, predicate, object_entity_id, valid_from,
+                        valid_to, confidence, source_drawer_id, source_file, created_at, updated_at
+                 FROM knowledge_graph_facts
+                 WHERE fact_id = ?1",
+                [fact_id],
+                decode_fact_row,
+            )
+            .optional()
+            .map_err(StorageError::from)
+    }
+
+    fn list_facts(&self) -> Result<Vec<KnowledgeGraphFact>> {
+        self.list_facts_matching(
+            "SELECT fact_id, subject_entity_id, predicate, object_entity_id, valid_from,
+                    valid_to, confidence, source_drawer_id, source_file, created_at, updated_at
+             FROM knowledge_graph_facts
+             ORDER BY COALESCE(valid_from, '9999-12-31') ASC, predicate ASC, fact_id ASC",
+            [],
+        )
+    }
+
+    fn list_facts_for_entity(&self, entity_id: &str) -> Result<Vec<KnowledgeGraphFact>> {
+        self.list_facts_matching(
+            "SELECT fact_id, subject_entity_id, predicate, object_entity_id, valid_from,
+                    valid_to, confidence, source_drawer_id, source_file, created_at, updated_at
+             FROM knowledge_graph_facts
+             WHERE subject_entity_id = ?1 OR object_entity_id = ?1
+             ORDER BY COALESCE(valid_from, '9999-12-31') ASC, predicate ASC, fact_id ASC",
+            [entity_id],
+        )
+    }
+
+    fn invalidate_active_fact(
+        &self,
+        subject_entity_id: &str,
+        predicate: &str,
+        object_entity_id: &str,
+        ended_at: Date,
+        updated_at: OffsetDateTime,
+    ) -> Result<usize> {
+        let connection = self.open_connection()?;
+        let changed = connection.execute(
+            "UPDATE knowledge_graph_facts
+             SET valid_to = ?4, updated_at = ?5
+             WHERE subject_entity_id = ?1
+               AND predicate = ?2
+               AND object_entity_id = ?3
+               AND valid_to IS NULL",
+            params![
+                subject_entity_id,
+                predicate,
+                object_entity_id,
+                encode_date(ended_at),
+                encode_time(updated_at)
+            ],
+        )?;
+        Ok(changed)
     }
 }
 
@@ -698,6 +871,20 @@ fn legacy_source_key(source_key: &str) -> Option<String> {
     Some(format!("{ingest_kind}:{relative_path}"))
 }
 
+impl SqliteOperationalStore {
+    fn list_facts_matching<P>(&self, sql: &str, params: P) -> Result<Vec<KnowledgeGraphFact>>
+    where
+        P: rusqlite::Params,
+    {
+        let connection = self.open_connection()?;
+        let mut statement = connection.prepare(sql)?;
+        statement
+            .query_map(params, decode_fact_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
+    }
+}
+
 fn encode_time(value: OffsetDateTime) -> String {
     value
         .format(&time::format_description::well_known::Rfc3339)
@@ -709,6 +896,66 @@ fn decode_time(raw: String) -> Result<OffsetDateTime> {
         .map_err(|err| StorageError::Invariant(err.to_string()))
 }
 
+fn encode_date(value: Date) -> String {
+    value
+        .format(&time::macros::format_description!("[year]-[month]-[day]"))
+        .unwrap_or_else(|_| value.to_string())
+}
+
+fn encode_optional_date(value: Option<Date>) -> Option<String> {
+    value.map(encode_date)
+}
+
+fn decode_optional_date(raw: Option<String>) -> rusqlite::Result<Option<Date>> {
+    raw.map(|value| {
+        Date::parse(&value, &time::macros::format_description!("[year]-[month]-[day]")).map_err(
+            |err| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(StorageError::Invariant(err.to_string())),
+                )
+            },
+        )
+    })
+    .transpose()
+}
+
+fn decode_fact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<KnowledgeGraphFact> {
+    Ok(KnowledgeGraphFact {
+        fact_id: row.get(0)?,
+        subject_entity_id: row.get(1)?,
+        predicate: row.get(2)?,
+        object_entity_id: row.get(3)?,
+        valid_from: decode_optional_date(row.get(4)?)?,
+        valid_to: decode_optional_date(row.get(5)?)?,
+        confidence: row.get(6)?,
+        source_drawer_id: row
+            .get::<_, Option<String>>(7)?
+            .map(|raw| {
+                DrawerId::new(raw).map_err(|err| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        7,
+                        rusqlite::types::Type::Text,
+                        Box::new(err),
+                    )
+                })
+            })
+            .transpose()?,
+        source_file: row.get(8)?,
+        created_at: decode_time(row.get(9)?).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(err))
+        })?,
+        updated_at: decode_time(row.get(10)?).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(
+                10,
+                rusqlite::types::Type::Text,
+                Box::new(err),
+            )
+        })?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use rusqlite::OptionalExtension;
@@ -716,15 +963,16 @@ mod tests {
     use time::macros::datetime;
 
     use super::{
-        EntityRegistryStore, GraphStore, IngestManifestStore, SqliteOperationalStore,
-        ToolStateStore, MIGRATIONS,
+        EntityRegistryStore, GraphStore, IngestManifestStore, KnowledgeGraphStore, MIGRATIONS,
+        SqliteOperationalStore, ToolStateStore,
     };
     use crate::types::{
         ConfigEntry, EntityRecord, GraphDocument, IngestManifestEntry, IngestRunStatus,
-        ToolStateEntry,
+        KnowledgeGraphFact, ToolStateEntry,
     };
     use mempalace_core::DrawerId;
     use serde_json::json;
+    use time::macros::date;
 
     #[test]
     fn applies_all_migrations() {
@@ -846,6 +1094,49 @@ mod tests {
         assert_eq!(
             store.get_graph_document("palace").unwrap().unwrap().payload,
             json!({ "rooms": ["backend"] })
+        );
+        assert_eq!(store.list_entities().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn stores_and_invalidates_knowledge_graph_facts() {
+        let tempdir = tempdir().unwrap();
+        let store = SqliteOperationalStore::new(tempdir.path().join("storage.sqlite3"));
+        store.ensure_schema().unwrap();
+
+        let fact = KnowledgeGraphFact {
+            fact_id: "fact-1".to_owned(),
+            subject_entity_id: "project:rust_rewrite".to_owned(),
+            predicate: "targets".to_owned(),
+            object_entity_id: "project:phase_1".to_owned(),
+            valid_from: Some(date!(2026 - 04 - 03)),
+            valid_to: None,
+            confidence: 1.0,
+            source_drawer_id: Some(DrawerId::new("project_alpha/backend/0001").unwrap()),
+            source_file: Some("docs/plan.md".to_owned()),
+            created_at: datetime!(2026-04-03 09:00:00 UTC),
+            updated_at: datetime!(2026-04-03 09:00:00 UTC),
+        };
+
+        store.upsert_fact(&fact).unwrap();
+
+        let stored = store.get_fact("fact-1").unwrap().unwrap();
+        assert_eq!(stored.predicate, "targets");
+        assert_eq!(store.list_facts_for_entity("project:rust_rewrite").unwrap().len(), 1);
+
+        let invalidated = store
+            .invalidate_active_fact(
+                "project:rust_rewrite",
+                "targets",
+                "project:phase_1",
+                date!(2026 - 04 - 04),
+                datetime!(2026-04-04 00:00:00 UTC),
+            )
+            .unwrap();
+        assert_eq!(invalidated, 1);
+        assert_eq!(
+            store.get_fact("fact-1").unwrap().unwrap().valid_to,
+            Some(date!(2026 - 04 - 04))
         );
     }
 
