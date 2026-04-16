@@ -505,6 +505,7 @@ mod tests {
     use super::{
         IdentitySource, Layer1Config, LayerRetrieveRequest, SearchError, SearchRuntime,
         WakeUpRequest, default_identity_path, generate_layer1, render_search_results,
+        trim_similarity,
     };
     use async_trait::async_trait;
     use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
@@ -803,6 +804,15 @@ mod tests {
             }
             Self { previous, _lock: lock }
         }
+
+        fn unset() -> Self {
+            let lock = HOME_ENV_MUTEX.lock().unwrap();
+            let previous = std::env::var_os("HOME");
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+            Self { previous, _lock: lock }
+        }
     }
 
     impl Drop for HomeEnvGuard {
@@ -1037,6 +1047,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_reports_provider_contract_when_embedding_vector_is_missing() {
+        let mut runtime = SearchRuntime::new(StubProvider { response: Vec::new() });
+        let store = sample_store();
+
+        let err = runtime
+            .search(
+                &store,
+                &SearchQuery {
+                    text: "auth".to_owned(),
+                    wing: None,
+                    room: None,
+                    limit: 5,
+                    profile: EmbeddingProfile::Balanced,
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            SearchError::Embeddings(mempalace_embeddings::EmbeddingError::ProviderContract(
+                ref message
+            )) if message == "provider returned no vector for a non-empty search query"
+        ));
+    }
+
+    #[tokio::test]
     async fn search_applies_combined_wing_and_room_filters() {
         let mut runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
         let store = sample_store();
@@ -1117,6 +1154,14 @@ mod tests {
         assert!(rendered.contains("Match:  0.069"));
     }
 
+    #[test]
+    fn trim_similarity_trims_trailing_zeroes_exactly() {
+        assert_eq!(trim_similarity(1.0), "1");
+        assert_eq!(trim_similarity(0.5), "0.5");
+        assert_eq!(trim_similarity(0.49), "0.49");
+        assert_eq!(trim_similarity(0.069), "0.069");
+    }
+
     #[tokio::test]
     async fn recall_returns_stable_filtered_layer_output() {
         let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
@@ -1159,6 +1204,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recall_limit_zero_uses_default_limit_of_ten() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = StubStore {
+            drawers: (0..12)
+                .map(|index| {
+                    record(
+                        &format!("wing_team/general/{index:04}"),
+                        "wing_team",
+                        "general",
+                        &format!("fixtures/{index:04}.txt"),
+                        &format!("entry {index:04}"),
+                        Some(10.0 - index as f32),
+                        datetime!(2026-04-11 09:00:00 UTC),
+                    )
+                })
+                .collect(),
+        };
+
+        let rendered = runtime
+            .recall(
+                &store,
+                &LayerRetrieveRequest {
+                    wing: Some(WingId::new("wing_team").unwrap()),
+                    room: None,
+                    limit: 0,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(rendered.starts_with("## L2 — ON-DEMAND (10) drawers"));
+        assert_eq!(rendered.matches("\n  [general] ").count(), 10);
+    }
+
+    #[tokio::test]
     async fn wake_up_uses_identity_and_groups_rooms_in_stable_order() {
         let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
         let store = sample_store();
@@ -1186,6 +1266,31 @@ mod tests {
         assert!(backend_index < rollout_index);
         assert!(rendered.contains("(team.txt)"));
         assert!(rendered.contains("(auth.py)"));
+    }
+
+    #[tokio::test]
+    async fn wake_up_applies_wing_filter_end_to_end() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+
+        let rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: Some(WingId::new("wing_code").unwrap()),
+                    identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+                    layer1: Layer1Config::default(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(rendered.contains("## L0 — IDENTITY\nReady."));
+        assert!(rendered.contains("## L1 — ESSENTIAL STORY"));
+        assert!(rendered.contains("[auth-migration]"));
+        assert!(rendered.contains("code.txt"));
+        assert!(!rendered.contains("team.txt"));
+        assert!(!rendered.contains("auth.py"));
     }
 
     #[tokio::test]
@@ -1317,6 +1422,20 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn wake_up_request_default_uses_literal_tilde_path_when_home_is_unset() {
+        let _home = HomeEnvGuard::unset();
+
+        assert_eq!(
+            default_identity_path(),
+            PathBuf::from("~").join(".mempalace").join("identity.txt")
+        );
+        assert_eq!(
+            WakeUpRequest::default().identity.render().unwrap(),
+            "## L0 — IDENTITY\nNo identity configured. Create ~/.mempalace/identity.txt"
+        );
+    }
+
     #[tokio::test]
     async fn generate_layer1_reports_empty_store_directly() {
         let store = StubStore { drawers: Vec::new() };
@@ -1392,6 +1511,30 @@ mod tests {
         assert!(rendered.contains("## L1 — ESSENTIAL STORY"));
         assert!(rendered.contains(entry));
         assert!(!rendered.contains("... (more in L3 search)"));
+    }
+
+    #[tokio::test]
+    async fn generate_layer1_matches_python_reference_for_header_budget_case() {
+        let store = StubStore {
+            drawers: vec![record(
+                "wing_team/cafe/0001",
+                "wing_team",
+                "cafe",
+                "fixtures/cafe.txt",
+                "header budget parity",
+                Some(0.9),
+                datetime!(2026-04-11 09:00:00 UTC),
+            )],
+        };
+        let expected = "## L1 — ESSENTIAL STORY\n\n[cafe]\n  - header budget parity  (cafe.txt)";
+        let max_chars =
+            "\n[cafe]".chars().count() + "  - header budget parity  (cafe.txt)".chars().count();
+
+        let rendered = generate_layer1(&store, None, Layer1Config { max_drawers: 1, max_chars })
+            .await
+            .unwrap();
+
+        assert_eq!(rendered, expected);
     }
 
     #[tokio::test]
