@@ -1,76 +1,20 @@
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader as StdBufReader, Write};
+use std::process::{Command, Stdio};
 
 use mempalace_config::MempalaceConfig;
 use mempalace_core::EmbeddingProfile;
-use mempalace_embeddings::{
-    EmbeddingProvider, EmbeddingRequest, EmbeddingResponse, StartupValidation,
-    StartupValidationStatus,
-};
-use mempalace_mcp::{McpServer, serve_transport};
+use mempalace_mcp::{DeterministicStubProvider, McpServer, serve_transport};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
-#[derive(Debug, Clone)]
-struct StubProvider {
-    profile: EmbeddingProfile,
-}
-
-impl StubProvider {
-    fn vector_for(&self, text: &str) -> Vec<f32> {
-        let lower = text.to_ascii_lowercase();
-        let seed = if ["auth", "migration", "parity"].iter().any(|token| lower.contains(token)) {
-            [1.0, 0.0, 0.0, 0.0]
-        } else if ["session", "diary", "ops"].iter().any(|token| lower.contains(token)) {
-            [0.0, 1.0, 0.0, 0.0]
-        } else if ["rust", "cli"].iter().any(|token| lower.contains(token)) {
-            [0.0, 0.0, 1.0, 0.0]
-        } else {
-            [0.0, 0.0, 0.0, 1.0]
-        };
-        let mut values = Vec::with_capacity(self.profile.metadata().dimensions);
-        while values.len() < self.profile.metadata().dimensions {
-            values.extend(seed);
-        }
-        values.truncate(self.profile.metadata().dimensions);
-        values
-    }
-}
-
-impl EmbeddingProvider for StubProvider {
-    fn profile(&self) -> &'static mempalace_core::EmbeddingProfileMetadata {
-        self.profile.metadata()
-    }
-
-    fn startup_validation(&self) -> mempalace_embeddings::Result<StartupValidation> {
-        Ok(StartupValidation {
-            status: StartupValidationStatus::Ready,
-            cache_root: PathBuf::from("/tmp/stub"),
-            model_id: self.profile.metadata().model_id,
-            detail: "stub".to_owned(),
-        })
-    }
-
-    fn embed(
-        &mut self,
-        request: &EmbeddingRequest,
-    ) -> mempalace_embeddings::Result<EmbeddingResponse> {
-        EmbeddingResponse::from_vectors(
-            request.texts().iter().map(|text| self.vector_for(text)).collect(),
-            self.profile.metadata().dimensions,
-            self.profile,
-            self.profile.metadata().model_id,
-        )
-    }
-}
-
-async fn test_server(tempdir: &TempDir) -> McpServer<StubProvider> {
+async fn test_server(tempdir: &TempDir) -> McpServer<DeterministicStubProvider> {
     let config = MempalaceConfig {
         schema_version: 1,
         collection_name: "mempalace_drawers".to_owned(),
         palace_path: tempdir.path().join("palace"),
         embedding_profile: EmbeddingProfile::Balanced,
     };
-    McpServer::from_parts(config, StubProvider { profile: EmbeddingProfile::Balanced })
+    McpServer::from_parts(config, DeterministicStubProvider::new(EmbeddingProfile::Balanced))
         .await
         .unwrap()
 }
@@ -181,4 +125,49 @@ async fn server_handles_embedding_backed_tool_calls_over_transport() {
     assert_eq!(diary_read_payload["agent"], "Transport Bot");
     assert_eq!(diary_read_payload["showing"], 1);
     assert_eq!(diary_read_payload["entries"][0]["topic"], "transport");
+}
+
+#[test]
+fn compiled_binary_serves_stdio_with_stub_embeddings() {
+    let tempdir = TempDir::new().unwrap();
+    let home_dir = tempdir.path().join("home");
+    std::fs::create_dir_all(&home_dir).unwrap();
+    let palace_path = tempdir.path().join("palace");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mempalace-mcp"))
+        .env("HOME", &home_dir)
+        .env("MEMPALACE_PALACE_PATH", &palace_path)
+        .env("MEMPALACE_STUB_EMBEDDINGS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        writeln!(
+            stdin,
+            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{}}}}"
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            "{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"mempalace_status\",\"arguments\":{{}}}}}}"
+        )
+        .unwrap();
+    }
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = StdBufReader::new(stdout);
+    let mut initialize = String::new();
+    let mut status = String::new();
+    reader.read_line(&mut initialize).unwrap();
+    reader.read_line(&mut status).unwrap();
+
+    let initialize: serde_json::Value = serde_json::from_str(initialize.trim()).unwrap();
+    let status: serde_json::Value = serde_json::from_str(status.trim()).unwrap();
+    assert_eq!(initialize["result"]["protocolVersion"], "2024-11-05");
+    assert_eq!(mempalace_mcp::decode_tool_payload(&status).unwrap()["total_drawers"], 0);
+
+    let exit = child.wait().unwrap();
+    assert!(exit.success());
 }

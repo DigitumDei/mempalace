@@ -1076,7 +1076,10 @@ where
                         valid_from: fact.valid_from.map(format_date),
                         valid_to: fact.valid_to.map(format_date),
                         confidence: fact.confidence,
-                        source_closet: None,
+                        source_closet: fact
+                            .source_drawer_id
+                            .as_ref()
+                            .map(|drawer_id| drawer_id.as_str().to_owned()),
                         current: is_active_on(&fact, today),
                     });
                 }
@@ -1094,7 +1097,10 @@ where
                         valid_from: fact.valid_from.map(format_date),
                         valid_to: fact.valid_to.map(format_date),
                         confidence: fact.confidence,
-                        source_closet: None,
+                        source_closet: fact
+                            .source_drawer_id
+                            .as_ref()
+                            .map(|drawer_id| drawer_id.as_str().to_owned()),
                         current: is_active_on(&fact, today),
                     });
                 }

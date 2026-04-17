@@ -9,7 +9,8 @@ use blake3::Hasher;
 use mempalace_config::{ConfigLoader, MempalaceConfig};
 use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
 use mempalace_embeddings::{
-    EmbeddingError, EmbeddingProvider, EmbeddingRequest, FastembedProvider, FastembedProviderConfig,
+    EmbeddingError, EmbeddingProvider, EmbeddingRequest, FastembedProvider,
+    FastembedProviderConfig, StartupValidation, StartupValidationStatus,
 };
 use mempalace_graph::{
     AddFactRequest, EntityKind, KnowledgeGraphRuntime, PalaceGraphSnapshot, QueryDirection,
@@ -39,6 +40,63 @@ const DIARY_TOPIC_PREFIX: &str = "diary:";
 pub const PALACE_PROTOCOL: &str = "IMPORTANT — MemPalace Memory Protocol:\n1. ON WAKE-UP: Call mempalace_status to load palace overview + AAAK spec.\n2. BEFORE RESPONDING about any person, project, or past event: call mempalace_kg_query or mempalace_search FIRST. Never guess — verify.\n3. IF UNSURE about a fact (name, gender, age, relationship): say \"let me check\" and query the palace. Wrong is worse than slow.\n4. AFTER EACH SESSION: call mempalace_diary_write to record what happened, what you learned, what matters.\n5. WHEN FACTS CHANGE: call mempalace_kg_invalidate on the old fact, mempalace_kg_add for the new one.\n\nThis protocol ensures the AI KNOWS before it speaks. Storage is not memory — but storage + this protocol = memory.";
 
 pub const AAAK_SPEC: &str = "AAAK is a compressed memory dialect that MemPalace uses for efficient storage.\nIt is designed to be readable by both humans and LLMs without decoding.\n\nFORMAT:\n  ENTITIES: 3-letter uppercase codes. ALC=Alice, JOR=Jordan, RIL=Riley, MAX=Max, BEN=Ben.\n  EMOTIONS: *action markers* before/during text. *warm*=joy, *fierce*=determined, *raw*=vulnerable, *bloom*=tenderness.\n  STRUCTURE: Pipe-separated fields. FAM: family | PROJ: projects | ⚠: warnings/reminders.\n  DATES: ISO format (2026-03-31). COUNTS: Nx = N mentions (e.g., 570x).\n  IMPORTANCE: ★ to ★★★★★ (1-5 scale).\n  HALLS: hall_facts, hall_events, hall_discoveries, hall_preferences, hall_advice.\n  WINGS: wing_user, wing_agent, wing_team, wing_code, wing_myproject, wing_hardware, wing_ue5, wing_ai_research.\n  ROOMS: Hyphenated slugs representing named ideas (e.g., chromadb-setup, gpu-pricing).\n\nEXAMPLE:\n  FAM: ALC→♡JOR | 2D(kids): RIL(18,sports) MAX(11,chess+swimming) | BEN(contributor)\n\nRead AAAK naturally — expand codes mentally, treat *markers* as emotional context.\nWhen WRITING AAAK: use entity codes, mark emotions, keep structure tight.";
+
+#[derive(Debug, Clone)]
+pub struct DeterministicStubProvider {
+    profile: EmbeddingProfile,
+}
+
+impl DeterministicStubProvider {
+    pub fn new(profile: EmbeddingProfile) -> Self {
+        Self { profile }
+    }
+
+    fn vector_for(&self, text: &str) -> Vec<f32> {
+        let lower = text.to_ascii_lowercase();
+        let seed = if ["auth", "migration", "parity"].iter().any(|token| lower.contains(token)) {
+            [1.0, 0.0, 0.0, 0.0]
+        } else if ["session", "diary", "ops"].iter().any(|token| lower.contains(token)) {
+            [0.0, 1.0, 0.0, 0.0]
+        } else if ["rust", "cli"].iter().any(|token| lower.contains(token)) {
+            [0.0, 0.0, 1.0, 0.0]
+        } else {
+            [0.0, 0.0, 0.0, 1.0]
+        };
+        let mut values = Vec::with_capacity(self.profile.metadata().dimensions);
+        while values.len() < self.profile.metadata().dimensions {
+            values.extend(seed);
+        }
+        values.truncate(self.profile.metadata().dimensions);
+        values
+    }
+}
+
+impl EmbeddingProvider for DeterministicStubProvider {
+    fn profile(&self) -> &'static mempalace_core::EmbeddingProfileMetadata {
+        self.profile.metadata()
+    }
+
+    fn startup_validation(&self) -> mempalace_embeddings::Result<StartupValidation> {
+        Ok(StartupValidation {
+            status: StartupValidationStatus::Ready,
+            cache_root: PathBuf::from("/tmp/stub"),
+            model_id: self.profile.metadata().model_id,
+            detail: "stub".to_owned(),
+        })
+    }
+
+    fn embed(
+        &mut self,
+        request: &EmbeddingRequest,
+    ) -> mempalace_embeddings::Result<mempalace_embeddings::EmbeddingResponse> {
+        mempalace_embeddings::EmbeddingResponse::from_vectors(
+            request.texts().iter().map(|text| self.vector_for(text)).collect(),
+            self.profile.metadata().dimensions,
+            self.profile,
+            self.profile.metadata().model_id,
+        )
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum McpError {
@@ -769,21 +827,21 @@ where
             .await
             .map_tool()?;
 
-        if drawers.is_empty() {
-            let legacy_wing_name = legacy_diary_wing_name(&agent_name);
-            if legacy_wing_name != diary_wing_name(&agent_name) {
-                let legacy_wing = parse_wing_id(&legacy_wing_name)?;
-                drawers = self
-                    .storage
-                    .drawer_store()
-                    .list_drawers(&DrawerFilter {
-                        wing: Some(legacy_wing),
-                        room: Some(room),
-                        ..DrawerFilter::default()
-                    })
-                    .await
-                    .map_tool()?;
-            }
+        let legacy_wing_name = legacy_diary_wing_name(&agent_name);
+        if legacy_wing_name != diary_wing_name(&agent_name) {
+            let legacy_wing = parse_wing_id(&legacy_wing_name)?;
+            let mut legacy_drawers = self
+                .storage
+                .drawer_store()
+                .list_drawers(&DrawerFilter {
+                    wing: Some(legacy_wing),
+                    room: Some(room),
+                    ..DrawerFilter::default()
+                })
+                .await
+                .map_tool()?;
+            legacy_drawers.retain(|drawer| drawer.added_by == agent_name);
+            drawers.extend(legacy_drawers);
         }
 
         if drawers.is_empty() {
@@ -876,8 +934,7 @@ where
         let valid_from_text = optional_string(arguments, "valid_from")?;
         let valid_from = valid_from_text.as_deref().map(parse_date).transpose()?;
         let source_closet = optional_string(arguments, "source_closet")?;
-        let source_drawer_id =
-            source_closet.as_deref().and_then(|value| parse_drawer_id(value).ok());
+        let source_drawer_id = source_closet.as_deref().map(parse_drawer_id).transpose()?;
         let runtime = KnowledgeGraphRuntime::new(self.storage.operational_store());
         let triple_id = runtime
             .add_fact(
@@ -914,11 +971,12 @@ where
             .transpose()?
             .unwrap_or_else(|| OffsetDateTime::now_utc().date());
         let runtime = KnowledgeGraphRuntime::new(self.storage.operational_store());
-        runtime
+        let invalidated = runtime
             .invalidate(&subject, &predicate, &object, ended, OffsetDateTime::now_utc())
             .map_tool_internal()?;
         Ok(json!({
-            "success": true,
+            "success": invalidated > 0,
+            "invalidated": invalidated,
             "fact": format!("{subject} → {predicate} → {object}"),
             "ended": ended_text.unwrap_or_else(|| "today".to_owned()),
         }))
@@ -1156,11 +1214,17 @@ fn optional_usize(arguments: &Value, field: &'static str) -> ToolResult<Option<u
 fn optional_f32(arguments: &Value, field: &'static str) -> ToolResult<Option<f32>> {
     match arguments.get(field) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_f64()
-            .map(|value| value as f32)
-            .ok_or_else(|| ToolError::InvalidParams(format!("field `{field}` must be an f32")))
-            .map(Some),
+        Some(value) => {
+            let value = value.as_f64().ok_or_else(|| {
+                ToolError::InvalidParams(format!("field `{field}` must be an f32"))
+            })?;
+            if !value.is_finite() || value < f32::MIN as f64 || value > f32::MAX as f64 {
+                return Err(ToolError::InvalidParams(format!(
+                    "field `{field}` must be a finite f32"
+                )));
+            }
+            Ok(Some(value as f32))
+        }
     }
 }
 
@@ -1345,62 +1409,9 @@ mod tests {
     use tokio::io::{AsyncReadExt, BufReader};
 
     #[derive(Debug, Clone)]
-    struct StubProvider {
-        profile: EmbeddingProfile,
-    }
-
-    impl StubProvider {
-        fn vector_for(&self, text: &str) -> Vec<f32> {
-            let lower = text.to_ascii_lowercase();
-            let seed = if ["auth", "migration", "parity"].iter().any(|token| lower.contains(token))
-            {
-                [1.0, 0.0, 0.0, 0.0]
-            } else if ["session", "diary", "ops"].iter().any(|token| lower.contains(token)) {
-                [0.0, 1.0, 0.0, 0.0]
-            } else if ["rust", "cli"].iter().any(|token| lower.contains(token)) {
-                [0.0, 0.0, 1.0, 0.0]
-            } else {
-                [0.0, 0.0, 0.0, 1.0]
-            };
-            let mut values = Vec::with_capacity(self.profile.metadata().dimensions);
-            while values.len() < self.profile.metadata().dimensions {
-                values.extend(seed);
-            }
-            values.truncate(self.profile.metadata().dimensions);
-            values
-        }
-    }
-
-    impl EmbeddingProvider for StubProvider {
-        fn profile(&self) -> &'static mempalace_core::EmbeddingProfileMetadata {
-            self.profile.metadata()
-        }
-
-        fn startup_validation(&self) -> mempalace_embeddings::Result<StartupValidation> {
-            Ok(StartupValidation {
-                status: StartupValidationStatus::Ready,
-                cache_root: PathBuf::from("/tmp/stub"),
-                model_id: self.profile.metadata().model_id,
-                detail: "stub".to_owned(),
-            })
-        }
-
-        fn embed(
-            &mut self,
-            request: &EmbeddingRequest,
-        ) -> mempalace_embeddings::Result<EmbeddingResponse> {
-            EmbeddingResponse::from_vectors(
-                request.texts().iter().map(|text| self.vector_for(text)).collect(),
-                self.profile.metadata().dimensions,
-                self.profile,
-                self.profile.metadata().model_id,
-            )
-        }
-    }
-
     struct TestHarness {
         _tempdir: TempDir,
-        server: McpServer<StubProvider>,
+        server: McpServer<DeterministicStubProvider>,
     }
 
     async fn test_harness() -> TestHarness {
@@ -1412,16 +1423,18 @@ mod tests {
             palace_path,
             embedding_profile: EmbeddingProfile::Balanced,
         };
-        let server =
-            McpServer::from_parts(config, StubProvider { profile: EmbeddingProfile::Balanced })
-                .await
-                .unwrap();
+        let server = McpServer::from_parts(
+            config,
+            DeterministicStubProvider::new(EmbeddingProfile::Balanced),
+        )
+        .await
+        .unwrap();
         seed_drawers(&server).await;
         seed_knowledge_graph(&server).await;
         TestHarness { _tempdir: tempdir, server }
     }
 
-    async fn seed_drawers(server: &McpServer<StubProvider>) {
+    async fn seed_drawers(server: &McpServer<DeterministicStubProvider>) {
         let mut runtime = server.runtime.lock().await;
         let now = datetime!(2026-04-11 09:00:00 UTC);
         let drawers = vec![
@@ -1441,7 +1454,9 @@ mod tests {
                 emotional_weight: None,
                 weight: None,
                 content: "Code notes: auth-migration keeps search filter semantics exact while storage changes underneath.".to_owned(),
-                content_hash: hash_text("code"),
+                content_hash: hash_text(
+                    "Code notes: auth-migration keeps search filter semantics exact while storage changes underneath.",
+                ),
                 embedding: vec![1.0; EmbeddingProfile::Balanced.metadata().dimensions],
             },
             DrawerRecord {
@@ -1460,7 +1475,9 @@ mod tests {
                 emotional_weight: None,
                 weight: None,
                 content: "The team decided the auth-migration must preserve CLI and MCP parity.".to_owned(),
-                content_hash: hash_text("team"),
+                content_hash: hash_text(
+                    "The team decided the auth-migration must preserve CLI and MCP parity.",
+                ),
                 embedding: vec![1.0; EmbeddingProfile::Balanced.metadata().dimensions],
             },
         ];
@@ -1472,7 +1489,7 @@ mod tests {
             .unwrap();
     }
 
-    async fn seed_knowledge_graph(server: &McpServer<StubProvider>) {
+    async fn seed_knowledge_graph(server: &McpServer<DeterministicStubProvider>) {
         let runtime = server.runtime.lock().await;
         let kg = KnowledgeGraphRuntime::new(runtime.storage.operational_store());
         kg.add_fact(
@@ -1687,7 +1704,7 @@ mod tests {
             chunk_index: 0,
             ingest_mode: "diary".to_owned(),
             extract_mode: None,
-            added_by: "legacy".to_owned(),
+            added_by: "Worker-One".to_owned(),
             filed_at,
             importance: None,
             emotional_weight: None,
@@ -1748,14 +1765,28 @@ mod tests {
             .server
             .handle_request(tool_call(13, "mempalace_list_rooms", json!({"wing":"wing_code"})))
             .await;
+        let list_all_rooms =
+            harness.server.handle_request(tool_call(130, "mempalace_list_rooms", json!({}))).await;
         let taxonomy =
             harness.server.handle_request(tool_call(14, "mempalace_get_taxonomy", json!({}))).await;
+        let aaak = harness
+            .server
+            .handle_request(tool_call(131, "mempalace_get_aaak_spec", json!({})))
+            .await;
         let traverse = harness
             .server
             .handle_request(tool_call(
                 15,
                 "mempalace_traverse",
                 json!({"start_room":"auth-migration","max_hops":2}),
+            ))
+            .await;
+        let missing_room = harness
+            .server
+            .handle_request(tool_call(
+                132,
+                "mempalace_traverse",
+                json!({"start_room":"auth-migratoin","max_hops":2}),
             ))
             .await;
         let tunnels = harness
@@ -1776,11 +1807,28 @@ mod tests {
         let rooms_payload = decode_tool_payload(&list_rooms).unwrap();
         assert_eq!(rooms_payload["rooms"]["auth-migration"], 1);
 
+        let all_rooms_payload = decode_tool_payload(&list_all_rooms).unwrap();
+        assert_eq!(all_rooms_payload["wing"], "all");
+        assert_eq!(all_rooms_payload["rooms"]["auth-migration"], 2);
+
         let taxonomy_payload = decode_tool_payload(&taxonomy).unwrap();
         assert_eq!(taxonomy_payload["taxonomy"]["wing_code"]["auth-migration"], 1);
 
+        let aaak_payload = decode_tool_payload(&aaak).unwrap();
+        assert_eq!(aaak_payload["aaak_spec"], AAAK_SPEC);
+
         let traverse_payload = decode_tool_payload(&traverse).unwrap();
         assert!(!traverse_payload.as_array().unwrap().is_empty());
+
+        let missing_room_payload = decode_tool_payload(&missing_room).unwrap();
+        assert_eq!(missing_room_payload["error"], "Room 'auth-migratoin' not found");
+        assert!(
+            missing_room_payload["suggestions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|room| room == "auth-migration")
+        );
 
         let tunnels_payload = decode_tool_payload(&tunnels).unwrap();
         assert!(!tunnels_payload.as_array().unwrap().is_empty());
@@ -1794,6 +1842,7 @@ mod tests {
     #[tokio::test]
     async fn knowledge_graph_tools_cover_add_query_invalidate_timeline_and_stats() {
         let harness = test_harness().await;
+        let source_closet = "wing_code/auth-migration/0001";
 
         let add = harness
             .server
@@ -1805,7 +1854,7 @@ mod tests {
                     "predicate":"works_on",
                     "object":"MemPalace",
                     "valid_from":"2026-04-12",
-                    "source_closet":"freeform source ref"
+                    "source_closet":source_closet
                 }),
             ))
             .await;
@@ -1823,6 +1872,7 @@ mod tests {
         assert_eq!(query_payload["count"], 1);
         assert_eq!(query_payload["facts"][0]["predicate"], "works_on");
         assert_eq!(query_payload["facts"][0]["object"], "MemPalace");
+        assert_eq!(query_payload["facts"][0]["source_closet"], source_closet);
 
         let timeline = harness
             .server
@@ -1831,6 +1881,12 @@ mod tests {
         let timeline_payload = decode_tool_payload(&timeline).unwrap();
         assert_eq!(timeline_payload["count"], 1);
         assert_eq!(timeline_payload["timeline"][0]["subject"], "Alice Smith");
+
+        let full_timeline =
+            harness.server.handle_request(tool_call(200, "mempalace_kg_timeline", json!({}))).await;
+        let full_timeline_payload = decode_tool_payload(&full_timeline).unwrap();
+        assert_eq!(full_timeline_payload["entity"], "all");
+        assert!(full_timeline_payload["count"].as_u64().unwrap() >= 2);
 
         let invalidate = harness
             .server
@@ -1846,6 +1902,24 @@ mod tests {
             ))
             .await;
         assert_eq!(decode_tool_payload(&invalidate).unwrap()["success"], true);
+        assert_eq!(decode_tool_payload(&invalidate).unwrap()["invalidated"], 1);
+
+        let invalidate_missing = harness
+            .server
+            .handle_request(tool_call(
+                201,
+                "mempalace_kg_invalidate",
+                json!({
+                    "subject":"Alice Smith",
+                    "predicate":"works_on",
+                    "object":"MemPalace",
+                    "ended":"2026-04-13"
+                }),
+            ))
+            .await;
+        let invalidate_missing_payload = decode_tool_payload(&invalidate_missing).unwrap();
+        assert_eq!(invalidate_missing_payload["success"], false);
+        assert_eq!(invalidate_missing_payload["invalidated"], 0);
 
         let stats =
             harness.server.handle_request(tool_call(22, "mempalace_kg_stats", json!({}))).await;
@@ -1877,6 +1951,24 @@ mod tests {
         let add_payload = decode_tool_payload(&add).unwrap();
         assert_eq!(add_payload["success"], true);
 
+        let duplicate_add = harness
+            .server
+            .handle_request(tool_call(
+                230,
+                "mempalace_add_drawer",
+                json!({
+                    "wing":"wing_myproject",
+                    "room":"backend",
+                    "content":content,
+                    "source_file":"notes.md",
+                    "added_by":"tester"
+                }),
+            ))
+            .await;
+        let duplicate_add_payload = decode_tool_payload(&duplicate_add).unwrap();
+        assert_eq!(duplicate_add_payload["success"], false);
+        assert_eq!(duplicate_add_payload["reason"], "duplicate");
+
         let duplicate = harness
             .server
             .handle_request(tool_call(
@@ -1898,6 +1990,42 @@ mod tests {
             ))
             .await;
         assert_eq!(decode_tool_payload(&delete).unwrap()["success"], true);
+
+        let post_delete_duplicate = harness
+            .server
+            .handle_request(tool_call(
+                231,
+                "mempalace_check_duplicate",
+                json!({"content":content,"threshold":0.9}),
+            ))
+            .await;
+        assert_eq!(decode_tool_payload(&post_delete_duplicate).unwrap()["is_duplicate"], false);
+
+        let post_delete_search = harness
+            .server
+            .handle_request(tool_call(
+                232,
+                "mempalace_search",
+                json!({"query":"Roadmap budget planning note from MCP","wing":"wing_myproject","room":"backend","limit":5}),
+            ))
+            .await;
+        assert!(
+            decode_tool_payload(&post_delete_search).unwrap()["results"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        let post_delete_rooms = harness
+            .server
+            .handle_request(tool_call(
+                233,
+                "mempalace_list_rooms",
+                json!({"wing":"wing_myproject"}),
+            ))
+            .await;
+        let rooms_payload = decode_tool_payload(&post_delete_rooms).unwrap();
+        assert!(rooms_payload["rooms"].as_object().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1941,7 +2069,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn diary_read_prefers_primary_wing_over_legacy_fallback() {
+    async fn diary_read_merges_primary_and_legacy_history_without_cross_agent_collisions() {
         let harness = test_harness().await;
         assert_eq!(
             decode_tool_payload(
@@ -1957,20 +2085,52 @@ mod tests {
             .unwrap()["success"],
             true
         );
-        assert_eq!(
-            decode_tool_payload(
-                &harness
-                    .server
-                    .handle_request(tool_call(
-                        96,
-                        "mempalace_diary_write",
-                        json!({"agent_name":"Worker One","entry":"SESSION:legacy-space","topic":"ops"}),
-                    ))
-                    .await,
-            )
-            .unwrap()["success"],
-            true
-        );
+        let legacy_drawer = DrawerRecord {
+            id: DrawerId::new("diary_legacy_worker_one_merged").unwrap(),
+            wing: WingId::new(&legacy_diary_wing_name("Worker-One")).unwrap(),
+            room: RoomId::new(DIARY_ROOM).unwrap(),
+            hall: Some(DIARY_HALL.to_owned()),
+            date: Some(date!(2026 - 04 - 16)),
+            source_file: format!("{DIARY_TOPIC_PREFIX}legacy"),
+            chunk_index: 0,
+            ingest_mode: "diary".to_owned(),
+            extract_mode: None,
+            added_by: "Worker-One".to_owned(),
+            filed_at: datetime!(2026-04-16 12:00:00 UTC),
+            importance: None,
+            emotional_weight: None,
+            weight: None,
+            content: "SESSION:legacy".to_owned(),
+            content_hash: hash_text("SESSION:legacy"),
+            embedding: vec![0.0; EmbeddingProfile::Balanced.metadata().dimensions],
+        };
+        let colliding_other_agent_drawer = DrawerRecord {
+            id: DrawerId::new("diary_worker_one_colliding_agent").unwrap(),
+            wing: WingId::new(&legacy_diary_wing_name("Worker-One")).unwrap(),
+            room: RoomId::new(DIARY_ROOM).unwrap(),
+            hall: Some(DIARY_HALL.to_owned()),
+            date: Some(date!(2026 - 04 - 17)),
+            source_file: format!("{DIARY_TOPIC_PREFIX}ops"),
+            chunk_index: 0,
+            ingest_mode: "diary".to_owned(),
+            extract_mode: None,
+            added_by: "Worker One".to_owned(),
+            filed_at: datetime!(2026-04-17 12:00:00 UTC),
+            importance: None,
+            emotional_weight: None,
+            weight: None,
+            content: "SESSION:other-agent".to_owned(),
+            content_hash: hash_text("SESSION:other-agent"),
+            embedding: vec![0.0; EmbeddingProfile::Balanced.metadata().dimensions],
+        };
+        let runtime = harness.server.runtime.lock().await;
+        runtime
+            .storage
+            .drawer_store()
+            .put_drawers(&[legacy_drawer, colliding_other_agent_drawer], DuplicateStrategy::Error)
+            .await
+            .unwrap();
+        drop(runtime);
 
         let payload = decode_tool_payload(
             &harness
@@ -1984,8 +2144,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(payload["entries"].as_array().unwrap().len(), 1);
-        assert_eq!(payload["entries"][0]["content"], "SESSION:primary");
+        let entries = payload["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["content"], "SESSION:primary");
+        assert_eq!(entries[1]["content"], "SESSION:legacy");
     }
 
     #[tokio::test]
@@ -2020,7 +2182,7 @@ mod tests {
             chunk_index: 0,
             ingest_mode: "diary".to_owned(),
             extract_mode: None,
-            added_by: "legacy".to_owned(),
+            added_by: "Worker-One".to_owned(),
             filed_at: datetime!(2026-04-17 12:00:00 UTC),
             importance: None,
             emotional_weight: None,
@@ -2054,5 +2216,24 @@ mod tests {
         assert_eq!(payload["entries"].as_array().unwrap().len(), 1);
         assert_eq!(payload["entries"][0]["content"], "SESSION:legacy-only");
         assert_eq!(payload["entries"][0]["topic"], "legacy");
+    }
+
+    #[tokio::test]
+    async fn kg_add_rejects_invalid_source_closet() {
+        let harness = test_harness().await;
+        let response = harness
+            .server
+            .handle_request(tool_call(
+                300,
+                "mempalace_kg_add",
+                json!({
+                    "subject":"Alice Smith",
+                    "predicate":"works_on",
+                    "object":"MemPalace",
+                    "source_closet":"freeform source ref"
+                }),
+            ))
+            .await;
+        assert_eq!(response["error"]["code"], json!(-32602));
     }
 }
