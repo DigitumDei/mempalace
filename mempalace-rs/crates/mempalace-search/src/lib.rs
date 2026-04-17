@@ -1419,6 +1419,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wake_up_aaak_honors_full_output_budget_end_to_end() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+
+        let rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: Some(WingId::new("wing_code").unwrap()),
+                    identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+                    layer1: Layer1Config {
+                        max_drawers: 3,
+                        max_chars: super::char_count(
+                            "## L0 — IDENTITY\nReady.\n\n## L1 — AAAK STORY\n\n[auth-migration]\n  ... (more in L3 search)",
+                        ),
+                    },
+                    format: WakeUpFormat::AaaK,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(super::char_count(&rendered), 81);
+        assert_eq!(
+            rendered,
+            "## L0 — IDENTITY\nReady.\n\n## L1 — AAAK STORY\n\n[auth-migration]\n  ... (more in L3 search)"
+        );
+    }
+
+    #[tokio::test]
+    async fn wake_up_aaak_is_deterministic_across_repeated_runs() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+        let request = WakeUpRequest {
+            wing: Some(WingId::new("wing_code").unwrap()),
+            identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+            layer1: Layer1Config::default(),
+            format: WakeUpFormat::AaaK,
+        };
+
+        let first = runtime.wake_up(&store, &request).await.unwrap();
+        let second = runtime.wake_up(&store, &request).await.unwrap();
+        let third = runtime.wake_up(&store, &request).await.unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(second, third);
+    }
+
+    #[tokio::test]
     async fn generate_layer1_honors_wing_filter() {
         let store = sample_store();
         let layer1 = generate_layer1(

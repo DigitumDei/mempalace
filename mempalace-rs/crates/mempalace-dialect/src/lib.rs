@@ -289,12 +289,9 @@ impl Dialect {
         }
 
         let mut lines = vec![identity.to_owned(), String::new(), "## L1 — AAAK STORY".to_owned()];
-        let mut total_chars = 0;
 
         for (room, records) in grouped {
-            let room_line = format!("\n[{room}]");
-            let room_chars = char_count(&room_line);
-            let mut room_lines = Vec::new();
+            let room_lines = vec![String::new(), format!("[{room}]")];
             let mut room_has_entries = false;
 
             for record in records {
@@ -309,26 +306,28 @@ impl Dialect {
                     },
                 );
                 let entry = format!("  - {}", header.replace('\n', " :: "));
-                let entry_chars = char_count(&entry);
-                let next_total =
-                    total_chars + if room_has_entries { 0 } else { room_chars } + entry_chars;
-                if next_total > config.max_chars {
-                    lines.extend(room_lines);
-                    lines.push("  ... (more in L3 search)".to_owned());
+                let mut candidate = lines.clone();
+                if !room_has_entries {
+                    candidate.extend(room_lines.iter().cloned());
+                }
+                candidate.push(entry.clone());
+
+                if char_count(&candidate.join("\n")) > config.max_chars {
+                    let mut truncated = lines.clone();
+                    truncated.push("  ... (more in L3 search)".to_owned());
+                    if char_count(&truncated.join("\n")) <= config.max_chars {
+                        lines = truncated;
+                    }
                     return lines.join("\n");
                 }
 
                 if !room_has_entries {
-                    lines.push(room_line.clone());
-                    total_chars += room_chars;
+                    lines.extend(room_lines.iter().cloned());
                     room_has_entries = true;
                 }
 
-                total_chars += entry_chars;
-                room_lines.push(entry);
+                lines.push(entry);
             }
-
-            lines.extend(room_lines);
         }
 
         lines.join("\n")
@@ -835,6 +834,43 @@ mod tests {
         assert!(rendered.contains("[alpha]"));
         assert!(rendered.contains("... (more in L3 search)"));
         assert!(!rendered.contains("[beta]"));
+    }
+
+    #[test]
+    fn render_wake_up_aaak_honors_full_output_budget() {
+        let dialect = Dialect::new();
+        let identity = "## L0 — IDENTITY\nReady.";
+        let rendered = dialect.render_wake_up_aaak(
+            identity,
+            &sample_drawers(),
+            &WakeUpAaaKConfig {
+                max_drawers: 3,
+                max_chars: char_count(
+                    "## L0 — IDENTITY\nReady.\n\n## L1 — AAAK STORY\n\n[auth-migration]\n  ... (more in L3 search)",
+                ),
+            },
+        );
+
+        assert_eq!(char_count(&rendered), 81);
+        assert_eq!(
+            rendered,
+            "## L0 — IDENTITY\nReady.\n\n## L1 — AAAK STORY\n\n[auth-migration]\n  ... (more in L3 search)"
+        );
+        assert!(!rendered.contains("wing_team|"));
+    }
+
+    #[test]
+    fn render_wake_up_aaak_is_deterministic_across_repeated_runs() {
+        let dialect = Dialect::new();
+        let identity = "## L0 — IDENTITY\nReady.";
+        let config = WakeUpAaaKConfig::default();
+
+        let first = dialect.render_wake_up_aaak(identity, &sample_drawers(), &config);
+        let second = dialect.render_wake_up_aaak(identity, &sample_drawers(), &config);
+        let third = dialect.render_wake_up_aaak(identity, &sample_drawers(), &config);
+
+        assert_eq!(first, second);
+        assert_eq!(second, third);
     }
 
     #[test]

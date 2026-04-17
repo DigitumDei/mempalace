@@ -54,9 +54,9 @@ Decision for Rust v1:
 - [x] Document deferment if reverse parsing is not retained.
 - [x] Add AAAK golden tests.
 - [x] Add formatting invariant tests.
-- [x] Add token-budget tests.
+- [x] Add token-budget tests, including full wake-up output budgets.
 - [x] Add long-input tests.
-- [x] Add deterministic rendering tests across repeated runs.
+- [x] Add deterministic rendering tests across repeated runs for both compression and wake-up output.
 
 ## Exit Gates
 
