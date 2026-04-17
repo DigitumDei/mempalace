@@ -1,5 +1,6 @@
 #![allow(missing_docs)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1334,6 +1335,8 @@ fn fixture_root() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
     use mempalace_embeddings::{
         EmbeddingProvider, EmbeddingResponse, StartupValidation, StartupValidationStatus,
     };
