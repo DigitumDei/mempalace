@@ -756,18 +756,23 @@ where
     async fn tool_diary_read(&mut self, arguments: &Value) -> ToolResult<Value> {
         let agent_name = required_string(arguments, "agent_name")?;
         let last_n = optional_usize(arguments, "last_n")?.unwrap_or(10);
-        let wing = parse_wing_id(&diary_wing_name(&agent_name))?;
         let room = parse_room_id(DIARY_ROOM)?;
-        let mut drawers = self
-            .storage
-            .drawer_store()
-            .list_drawers(&DrawerFilter {
-                wing: Some(wing),
-                room: Some(room),
-                ..DrawerFilter::default()
-            })
-            .await
-            .map_tool()?;
+        let mut drawers = Vec::new();
+
+        for wing_name in diary_wing_names(&agent_name) {
+            let wing = parse_wing_id(&wing_name)?;
+            let mut matches = self
+                .storage
+                .drawer_store()
+                .list_drawers(&DrawerFilter {
+                    wing: Some(wing),
+                    room: Some(room.clone()),
+                    ..DrawerFilter::default()
+                })
+                .await
+                .map_tool()?;
+            drawers.append(&mut matches);
+        }
 
         if drawers.is_empty() {
             return Ok(json!({
@@ -777,6 +782,12 @@ where
             }));
         }
 
+        let mut unique_drawers = BTreeMap::new();
+        for drawer in drawers {
+            unique_drawers.entry(drawer.id.clone()).or_insert(drawer);
+        }
+
+        let mut drawers = unique_drawers.into_values().collect::<Vec<_>>();
         drawers.sort_by(|left, right| right.filed_at.cmp(&left.filed_at));
         let total = drawers.len();
         let entries = drawers
@@ -1131,7 +1142,7 @@ fn optional_usize(arguments: &Value, field: &'static str) -> ToolResult<Option<u
         Some(value) => value
             .as_u64()
             .map(|value| value as usize)
-            .ok_or_else(|| ToolError::InvalidParams(format!("field `{field}` must be an integer")))
+            .ok_or_else(|| ToolError::InvalidParams(format!("field `{field}` must be a usize")))
             .map(Some),
     }
 }
@@ -1142,7 +1153,7 @@ fn optional_f32(arguments: &Value, field: &'static str) -> ToolResult<Option<f32
         Some(value) => value
             .as_f64()
             .map(|value| value as f32)
-            .ok_or_else(|| ToolError::InvalidParams(format!("field `{field}` must be a number")))
+            .ok_or_else(|| ToolError::InvalidParams(format!("field `{field}` must be an f32")))
             .map(Some),
     }
 }
@@ -1235,10 +1246,37 @@ fn infer_entity_kind(name: &str) -> EntityKind {
 }
 
 fn diary_wing_name(agent_name: &str) -> String {
-    format!("wing_{}", slugify(agent_name))
+    format!("wing_{}", diary_slugify(agent_name))
 }
 
-fn slugify(value: &str) -> String {
+fn legacy_diary_wing_name(agent_name: &str) -> String {
+    format!("wing_{}", legacy_slugify(agent_name))
+}
+
+fn diary_wing_names(agent_name: &str) -> Vec<String> {
+    let primary = diary_wing_name(agent_name);
+    let legacy = legacy_diary_wing_name(agent_name);
+    if primary == legacy { vec![primary] } else { vec![primary, legacy] }
+}
+
+fn diary_slugify(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_whitespace() {
+                '_'
+            } else if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '/' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn legacy_slugify(value: &str) -> String {
     value
         .trim()
         .to_ascii_lowercase()
@@ -1581,6 +1619,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn diary_tools_preserve_allowed_punctuation_in_wing_ids() {
+        let harness = test_harness().await;
+        let first = harness
+            .server
+            .handle_request(tool_call(
+                90,
+                "mempalace_diary_write",
+                json!({"agent_name":"Worker-One","entry":"SESSION:dash","topic":"ops"}),
+            ))
+            .await;
+        let second = harness
+            .server
+            .handle_request(tool_call(
+                91,
+                "mempalace_diary_write",
+                json!({"agent_name":"Worker One","entry":"SESSION:space","topic":"ops"}),
+            ))
+            .await;
+        assert_eq!(decode_tool_payload(&first).unwrap()["success"], true);
+        assert_eq!(decode_tool_payload(&second).unwrap()["success"], true);
+
+        let worker_dash = decode_tool_payload(
+            &harness
+                .server
+                .handle_request(tool_call(
+                    92,
+                    "mempalace_diary_read",
+                    json!({"agent_name":"Worker-One","last_n":10}),
+                ))
+                .await,
+        )
+        .unwrap();
+        let worker_space = decode_tool_payload(
+            &harness
+                .server
+                .handle_request(tool_call(
+                    93,
+                    "mempalace_diary_read",
+                    json!({"agent_name":"Worker One","last_n":10}),
+                ))
+                .await,
+        )
+        .unwrap();
+
+        assert_eq!(worker_dash["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(worker_dash["entries"][0]["content"], "SESSION:dash");
+        assert_eq!(worker_space["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(worker_space["entries"][0]["content"], "SESSION:space");
+        assert_eq!(diary_wing_name("Worker-One"), "wing_worker-one");
+        assert_eq!(diary_wing_name("Worker.One"), "wing_worker.one");
+    }
+
+    #[tokio::test]
+    async fn diary_read_falls_back_to_legacy_collapsed_wing_name() {
+        let harness = test_harness().await;
+        let filed_at = datetime!(2026-04-17 12:00:00 UTC);
+        let legacy_drawer = DrawerRecord {
+            id: DrawerId::new("diary_legacy_worker_one_0001").unwrap(),
+            wing: WingId::new(&legacy_diary_wing_name("Worker-One")).unwrap(),
+            room: RoomId::new(DIARY_ROOM).unwrap(),
+            hall: Some(DIARY_HALL.to_owned()),
+            date: Some(date!(2026 - 04 - 17)),
+            source_file: format!("{DIARY_TOPIC_PREFIX}legacy"),
+            chunk_index: 0,
+            ingest_mode: "diary".to_owned(),
+            extract_mode: None,
+            added_by: "legacy".to_owned(),
+            filed_at,
+            importance: None,
+            emotional_weight: None,
+            weight: None,
+            content: "SESSION:legacy-collapsed".to_owned(),
+            content_hash: hash_text("SESSION:legacy-collapsed"),
+            embedding: vec![0.0; EmbeddingProfile::Balanced.metadata().dimensions],
+        };
+        let runtime = harness.server.runtime.lock().await;
+        runtime
+            .storage
+            .drawer_store()
+            .put_drawers(&[legacy_drawer], DuplicateStrategy::Error)
+            .await
+            .unwrap();
+        drop(runtime);
+
+        let read = harness
+            .server
+            .handle_request(tool_call(
+                94,
+                "mempalace_diary_read",
+                json!({"agent_name":"Worker-One","last_n":10}),
+            ))
+            .await;
+        let payload = decode_tool_payload(&read).unwrap();
+
+        assert_eq!(payload["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["entries"][0]["content"], "SESSION:legacy-collapsed");
+        assert_eq!(payload["entries"][0]["topic"], "legacy");
+    }
+
+    #[tokio::test]
     async fn concurrent_tool_writes_serialize_without_corruption() {
         let harness = test_harness().await;
         let first = harness.server.handle_request(tool_call(
@@ -1798,5 +1936,14 @@ mod tests {
         assert_eq!(infer_entity_kind("CUDA"), EntityKind::Concept);
         assert_eq!(infer_entity_kind("MemPalace"), EntityKind::Unknown);
         assert_eq!(infer_entity_kind("Mary-Anne"), EntityKind::Person);
+    }
+
+    #[test]
+    fn diary_wing_names_include_legacy_lookup_only_when_needed() {
+        assert_eq!(diary_wing_names("Worker One"), vec!["wing_worker_one".to_owned()]);
+        assert_eq!(
+            diary_wing_names("Worker-One"),
+            vec!["wing_worker-one".to_owned(), "wing_worker_one".to_owned()]
+        );
     }
 }
