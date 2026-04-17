@@ -55,7 +55,7 @@ impl EmbeddingProvider for StubProvider {
         request: &EmbeddingRequest,
     ) -> mempalace_embeddings::Result<EmbeddingResponse> {
         EmbeddingResponse::from_vectors(
-            request.inputs().iter().map(|text| self.vector_for(text)).collect(),
+            request.texts().iter().map(|text| self.vector_for(text)).collect(),
             self.profile.metadata().dimensions,
             self.profile,
             self.profile.metadata().model_id,
