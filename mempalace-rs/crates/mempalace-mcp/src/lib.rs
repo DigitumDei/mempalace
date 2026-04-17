@@ -1,6 +1,5 @@
 #![allow(missing_docs)]
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -757,21 +756,33 @@ where
         let agent_name = required_string(arguments, "agent_name")?;
         let last_n = optional_usize(arguments, "last_n")?.unwrap_or(10);
         let room = parse_room_id(DIARY_ROOM)?;
-        let mut drawers = Vec::new();
+        let primary_wing = parse_wing_id(&diary_wing_name(&agent_name))?;
+        let mut drawers = self
+            .storage
+            .drawer_store()
+            .list_drawers(&DrawerFilter {
+                wing: Some(primary_wing),
+                room: Some(room.clone()),
+                ..DrawerFilter::default()
+            })
+            .await
+            .map_tool()?;
 
-        for wing_name in diary_wing_names(&agent_name) {
-            let wing = parse_wing_id(&wing_name)?;
-            let mut matches = self
-                .storage
-                .drawer_store()
-                .list_drawers(&DrawerFilter {
-                    wing: Some(wing),
-                    room: Some(room.clone()),
-                    ..DrawerFilter::default()
-                })
-                .await
-                .map_tool()?;
-            drawers.append(&mut matches);
+        if drawers.is_empty() {
+            let legacy_wing_name = legacy_diary_wing_name(&agent_name);
+            if legacy_wing_name != diary_wing_name(&agent_name) {
+                let legacy_wing = parse_wing_id(&legacy_wing_name)?;
+                drawers = self
+                    .storage
+                    .drawer_store()
+                    .list_drawers(&DrawerFilter {
+                        wing: Some(legacy_wing),
+                        room: Some(room),
+                        ..DrawerFilter::default()
+                    })
+                    .await
+                    .map_tool()?;
+            }
         }
 
         if drawers.is_empty() {
@@ -782,12 +793,6 @@ where
             }));
         }
 
-        let mut unique_drawers = BTreeMap::new();
-        for drawer in drawers {
-            unique_drawers.entry(drawer.id.clone()).or_insert(drawer);
-        }
-
-        let mut drawers = unique_drawers.into_values().collect::<Vec<_>>();
         drawers.sort_by(|left, right| right.filed_at.cmp(&left.filed_at));
         let total = drawers.len();
         let entries = drawers
@@ -1251,12 +1256,6 @@ fn diary_wing_name(agent_name: &str) -> String {
 
 fn legacy_diary_wing_name(agent_name: &str) -> String {
     format!("wing_{}", legacy_slugify(agent_name))
-}
-
-fn diary_wing_names(agent_name: &str) -> Vec<String> {
-    let primary = diary_wing_name(agent_name);
-    let legacy = legacy_diary_wing_name(agent_name);
-    if primary == legacy { vec![primary] } else { vec![primary, legacy] }
 }
 
 fn diary_slugify(value: &str) -> String {
@@ -1938,12 +1937,51 @@ mod tests {
         assert_eq!(infer_entity_kind("Mary-Anne"), EntityKind::Person);
     }
 
-    #[test]
-    fn diary_wing_names_include_legacy_lookup_only_when_needed() {
-        assert_eq!(diary_wing_names("Worker One"), vec!["wing_worker_one".to_owned()]);
+    #[tokio::test]
+    async fn diary_read_prefers_primary_wing_over_legacy_fallback() {
+        let harness = test_harness().await;
         assert_eq!(
-            diary_wing_names("Worker-One"),
-            vec!["wing_worker-one".to_owned(), "wing_worker_one".to_owned()]
+            decode_tool_payload(
+                &harness
+                    .server
+                    .handle_request(tool_call(
+                        95,
+                        "mempalace_diary_write",
+                        json!({"agent_name":"Worker-One","entry":"SESSION:primary","topic":"ops"}),
+                    ))
+                    .await,
+            )
+            .unwrap()["success"],
+            true
         );
+        assert_eq!(
+            decode_tool_payload(
+                &harness
+                    .server
+                    .handle_request(tool_call(
+                        96,
+                        "mempalace_diary_write",
+                        json!({"agent_name":"Worker One","entry":"SESSION:legacy-space","topic":"ops"}),
+                    ))
+                    .await,
+            )
+            .unwrap()["success"],
+            true
+        );
+
+        let payload = decode_tool_payload(
+            &harness
+                .server
+                .handle_request(tool_call(
+                    97,
+                    "mempalace_diary_read",
+                    json!({"agent_name":"Worker-One","last_n":10}),
+                ))
+                .await,
+        )
+        .unwrap();
+
+        assert_eq!(payload["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["entries"][0]["content"], "SESSION:primary");
     }
 }
