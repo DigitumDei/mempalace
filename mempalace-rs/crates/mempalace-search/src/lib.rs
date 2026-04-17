@@ -123,6 +123,7 @@ pub struct LayerRetrieveRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchRuntime<P> {
     provider: P,
+    dialect: Dialect,
 }
 
 impl<P> SearchRuntime<P>
@@ -130,7 +131,11 @@ where
     P: EmbeddingProvider,
 {
     pub fn new(provider: P) -> Self {
-        Self { provider }
+        Self::with_dialect(provider, Dialect::new())
+    }
+
+    pub fn with_dialect(provider: P, dialect: Dialect) -> Self {
+        Self { provider, dialect }
     }
 
     pub fn provider(&self) -> &P {
@@ -139,6 +144,10 @@ where
 
     pub fn provider_mut(&mut self) -> &mut P {
         &mut self.provider
+    }
+
+    pub fn dialect(&self) -> &Dialect {
+        &self.dialect
     }
 
     pub async fn search<S>(&mut self, store: &S, query: &SearchQuery) -> Result<Vec<SearchResult>>
@@ -268,8 +277,7 @@ where
             }
             WakeUpFormat::AaaK => {
                 let drawers = list_layer_drawers(store, request.wing.clone()).await?;
-                let dialect = Dialect::new();
-                Ok(dialect.render_wake_up_aaak(
+                Ok(self.dialect.render_wake_up_aaak(
                     &identity,
                     &drawers,
                     &WakeUpAaaKConfig {
@@ -1372,6 +1380,40 @@ mod tests {
         assert!(rendered.contains("wing_code|auth-migration|2026-04-11|code"));
         assert!(rendered.contains(":: 0:???|"));
         assert!(!rendered.contains("wing_team|"));
+    }
+
+    #[tokio::test]
+    async fn wake_up_aaak_uses_configured_runtime_dialect() {
+        let runtime = SearchRuntime::with_dialect(
+            StubProvider { response: vec![embedding(0.0)] },
+            Dialect::with_entities([("alice", "ALC")]),
+        );
+        let store = StubStore {
+            drawers: vec![record(
+                "wing_code/notes/0001",
+                "wing_code",
+                "notes",
+                "fixtures/alice.txt",
+                "alice documented the migration contract.",
+                Some(10.0),
+                datetime!(2026-04-11 09:45:00 UTC),
+            )],
+        };
+
+        let rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: Some(WingId::new("wing_code").unwrap()),
+                    identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+                    layer1: Layer1Config::default(),
+                    format: WakeUpFormat::AaaK,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(rendered.contains(":: 0:ALC|"));
     }
 
     #[tokio::test]

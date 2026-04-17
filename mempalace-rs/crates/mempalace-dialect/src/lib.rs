@@ -288,7 +288,11 @@ impl Dialect {
             grouped.entry(record.room.as_str().to_owned()).or_default().push(record);
         }
 
-        let mut lines = vec![identity.to_owned(), String::new(), "## L1 — AAAK STORY".to_owned()];
+        let mut lines = Vec::new();
+        let mut rendered_chars = 0;
+        push_line(&mut lines, &mut rendered_chars, identity.to_owned());
+        push_line(&mut lines, &mut rendered_chars, String::new());
+        push_line(&mut lines, &mut rendered_chars, "## L1 — AAAK STORY".to_owned());
 
         for (room, records) in grouped {
             let room_lines = vec![String::new(), format!("[{room}]")];
@@ -306,27 +310,50 @@ impl Dialect {
                     },
                 );
                 let entry = format!("  - {}", header.replace('\n', " :: "));
-                let mut candidate = lines.clone();
-                if !room_has_entries {
-                    candidate.extend(room_lines.iter().cloned());
-                }
-                candidate.push(entry.clone());
+                let room_lines_chars = if room_has_entries {
+                    0
+                } else {
+                    appended_char_count(lines.len(), &room_lines)
+                };
+                let entry_chars = appended_char_count(
+                    lines.len() + if room_has_entries { 0 } else { room_lines.len() },
+                    std::slice::from_ref(&entry),
+                );
 
-                if char_count(&candidate.join("\n")) > config.max_chars {
+                if rendered_chars + room_lines_chars + entry_chars > config.max_chars {
+                    let ellipsis = "  ... (more in L3 search)".to_owned();
                     let mut truncated = lines.clone();
-                    truncated.push("  ... (more in L3 search)".to_owned());
-                    if char_count(&truncated.join("\n")) <= config.max_chars {
+                    let mut truncated_chars = rendered_chars;
+                    if !room_has_entries {
+                        let room_with_ellipsis_chars = room_lines_chars
+                            + appended_char_count(
+                                lines.len() + room_lines.len(),
+                                std::slice::from_ref(&ellipsis),
+                            );
+                        if truncated_chars + room_with_ellipsis_chars <= config.max_chars {
+                            for room_line in &room_lines {
+                                push_line(&mut truncated, &mut truncated_chars, room_line.clone());
+                            }
+                        }
+                    }
+                    if truncated_chars
+                        + appended_char_count(truncated.len(), std::slice::from_ref(&ellipsis))
+                        <= config.max_chars
+                    {
+                        push_line(&mut truncated, &mut truncated_chars, ellipsis);
                         lines = truncated;
                     }
                     return lines.join("\n");
                 }
 
                 if !room_has_entries {
-                    lines.extend(room_lines.iter().cloned());
+                    for room_line in &room_lines {
+                        push_line(&mut lines, &mut rendered_chars, room_line.clone());
+                    }
                     room_has_entries = true;
                 }
 
-                lines.push(entry);
+                push_line(&mut lines, &mut rendered_chars, entry);
             }
         }
 
@@ -353,21 +380,17 @@ impl Dialect {
         }
 
         for (index, word) in text.split_whitespace().enumerate() {
-            let clean = word.chars().filter(|ch| ch.is_ascii_alphabetic()).collect::<String>();
+            let clean = word.chars().filter(|ch| ch.is_alphanumeric()).collect::<String>();
             if clean.len() < 2 || index == 0 {
                 continue;
             }
-            let mut chars = clean.chars();
-            let first = chars.next().unwrap_or_default();
-            if !first.is_ascii_uppercase()
-                || !chars.clone().all(|ch| ch.is_ascii_lowercase())
-                || is_stop_word(&clean.to_lowercase())
-            {
+            if !is_fallback_entity_candidate(&clean) || is_stop_word(&clean.to_lowercase()) {
                 continue;
             }
 
-            let code = clean.chars().take(3).collect::<String>().to_ascii_uppercase();
-            if self.skip_names.iter().any(|skip| clean.to_lowercase().contains(skip)) {
+            let clean_lower = clean.to_lowercase();
+            let code = clean.chars().take(3).collect::<String>().to_uppercase();
+            if self.skip_names.iter().any(|skip| clean_lower.contains(skip)) {
                 continue;
             }
             if !found.contains(&code) {
@@ -525,9 +548,9 @@ fn tokenize_words(text: &str) -> Vec<String> {
 
     for ch in text.chars() {
         let valid = if current.is_empty() {
-            ch.is_ascii_alphabetic()
+            ch.is_alphanumeric()
         } else {
-            ch.is_ascii_alphabetic() || ch == '_' || ch == '-'
+            ch.is_alphanumeric() || ch == '_' || ch == '-'
         };
 
         if valid {
@@ -547,15 +570,26 @@ fn tokenize_words(text: &str) -> Vec<String> {
 fn split_sentences(text: &str) -> Vec<String> {
     let mut sentences = Vec::new();
     let mut current = String::new();
+    let chars = text.chars().collect::<Vec<_>>();
 
-    for ch in text.chars() {
-        if matches!(ch, '.' | '!' | '?' | '\n') {
+    for (index, ch) in chars.iter().copied().enumerate() {
+        if ch == '\n' {
+            if !current.trim().is_empty() {
+                sentences.push(current.trim().to_owned());
+            }
+            current.clear();
+            continue;
+        }
+
+        current.push(ch);
+
+        if matches!(ch, '.' | '!' | '?') && sentence_boundary(&chars, index) {
             if !current.trim().is_empty() {
                 sentences.push(current.trim().to_owned());
             }
             current.clear();
         } else {
-            current.push(ch);
+            continue;
         }
     }
 
@@ -578,12 +612,70 @@ fn sanitize_aaak_field(text: &str) -> String {
     text.replace('|', "/").replace('"', "'")
 }
 
+fn push_line(lines: &mut Vec<String>, rendered_chars: &mut usize, line: String) {
+    if !lines.is_empty() {
+        *rendered_chars += 1;
+    }
+    *rendered_chars += char_count(&line);
+    lines.push(line);
+}
+
+fn appended_char_count(existing_len: usize, appended: &[String]) -> usize {
+    appended
+        .iter()
+        .enumerate()
+        .map(|(index, line)| char_count(line) + if existing_len == 0 && index == 0 { 0 } else { 1 })
+        .sum()
+}
+
 fn char_count(text: &str) -> usize {
     text.chars().count()
 }
 
 fn is_stop_word(word: &str) -> bool {
     STOP_WORDS.contains(&word)
+}
+
+fn is_fallback_entity_candidate(word: &str) -> bool {
+    let mut chars = word.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_uppercase() {
+        return false;
+    }
+    let rest = chars.collect::<Vec<_>>();
+    if rest.is_empty() {
+        return false;
+    }
+
+    let has_lowercase = rest.iter().any(|ch| ch.is_lowercase());
+    let has_uppercase = rest.iter().any(|ch| ch.is_uppercase());
+
+    if has_lowercase && has_uppercase {
+        return false;
+    }
+
+    rest.iter().all(|ch| ch.is_lowercase() || ch.is_uppercase() || ch.is_numeric())
+}
+
+fn sentence_boundary(chars: &[char], index: usize) -> bool {
+    let Some(current) = chars.get(index) else {
+        return false;
+    };
+    if !matches!(current, '.' | '!' | '?') {
+        return false;
+    }
+
+    let previous = index.checked_sub(1).and_then(|value| chars.get(value)).copied();
+    let next = chars.get(index + 1).copied();
+
+    if matches!((previous, next), (Some(left), Some(right)) if left.is_alphanumeric() && right.is_alphanumeric())
+    {
+        return false;
+    }
+
+    next.is_none_or(|ch| ch.is_whitespace())
 }
 
 fn source_label(source_file: &str) -> &str {
@@ -607,6 +699,7 @@ mod tests {
     };
     use mempalace_core::{DrawerId, DrawerRecord, RoomId, WingId};
     use serde_json::Value;
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
     use time::macros::{date, datetime};
@@ -786,6 +879,45 @@ mod tests {
     }
 
     #[test]
+    fn compress_detects_uppercase_acronyms_in_fallback_entities() {
+        let dialect = Dialect::new();
+        let compressed = dialect.compress(
+            "We kept MCP and CLI parity while the API stayed stable.",
+            &SourceMetadata::default(),
+        );
+        let entity_field = compressed.split('|').next().unwrap();
+        let entities = entity_field.trim_start_matches("0:").split('+').collect::<BTreeSet<_>>();
+
+        assert_eq!(entities, BTreeSet::from(["API", "CLI", "MCP"]));
+    }
+
+    #[test]
+    fn compress_preserves_alphanumeric_and_non_ascii_topics() {
+        let dialect = Dialect::new();
+        let compressed = dialect.compress(
+            "München v1_0 stayed online after port 8080 moved behind the edge.",
+            &SourceMetadata::default(),
+        );
+        let topic_field = compressed.split('|').nth(1).unwrap();
+        let topics = topic_field.split('_').collect::<Vec<_>>();
+
+        assert!(topics.contains(&"münchen"));
+        assert!(topics.contains(&"8080"));
+        assert!(topic_field.contains("v1_0"));
+    }
+
+    #[test]
+    fn compress_keeps_decimal_versions_inside_a_sentence() {
+        let dialect = Dialect::new();
+        let compressed = dialect.compress(
+            "We shipped v1.0 because the old fallback kept breaking users.",
+            &SourceMetadata::default(),
+        );
+
+        assert!(compressed.contains("\"We shipped v1.0 because the old fallback kept brea...\""));
+    }
+
+    #[test]
     fn render_wake_up_aaak_is_grouped_and_stable() {
         let dialect = Dialect::new();
         let rendered = dialect.render_wake_up_aaak(
@@ -857,6 +989,29 @@ mod tests {
             "## L0 — IDENTITY\nReady.\n\n## L1 — AAAK STORY\n\n[auth-migration]\n  ... (more in L3 search)"
         );
         assert!(!rendered.contains("wing_team|"));
+    }
+
+    #[test]
+    fn render_wake_up_aaak_preserves_room_context_in_truncation_fallback() {
+        let dialect = Dialect::new();
+        let drawers = vec![sample_record(
+            "wing_code/auth-migration/0001",
+            "wing_code",
+            "auth-migration",
+            "fixtures/code.txt",
+            "This entry is intentionally long enough that the AAAK output cannot fit once the entry itself is appended.",
+            Some(10.0),
+            datetime!(2026-04-11 09:45:00 UTC),
+        )];
+        let expected = "## L0 — IDENTITY\nReady.\n\n## L1 — AAAK STORY\n\n[auth-migration]\n  ... (more in L3 search)";
+
+        let rendered = dialect.render_wake_up_aaak(
+            "## L0 — IDENTITY\nReady.",
+            &drawers,
+            &WakeUpAaaKConfig { max_drawers: 1, max_chars: char_count(expected) },
+        );
+
+        assert_eq!(rendered, expected);
     }
 
     #[test]
