@@ -7,10 +7,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use mempalace_core as core;
+pub use mempalace_dialect as dialect;
 pub use mempalace_embeddings as embeddings;
 pub use mempalace_storage as storage;
 
 use mempalace_core::{DrawerRecord, SearchQuery, SearchResult};
+use mempalace_dialect::{Dialect, WakeUpAaaKConfig};
 use mempalace_embeddings::{EmbeddingProvider, EmbeddingRequest};
 use mempalace_storage::{DrawerFilter, DrawerMatch, DrawerStore, SearchRequest};
 use thiserror::Error;
@@ -61,6 +63,7 @@ pub struct WakeUpRequest {
     pub wing: Option<mempalace_core::WingId>,
     pub identity: IdentitySource,
     pub layer1: Layer1Config,
+    pub format: WakeUpFormat,
 }
 
 impl Default for WakeUpRequest {
@@ -71,8 +74,16 @@ impl Default for WakeUpRequest {
                 .map(IdentitySource::DefaultPath)
                 .unwrap_or(IdentitySource::MissingDefault),
             layer1: Layer1Config::default(),
+            format: WakeUpFormat::PlainText,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WakeUpFormat {
+    #[default]
+    PlainText,
+    AaaK,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +123,7 @@ pub struct LayerRetrieveRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchRuntime<P> {
     provider: P,
+    dialect: Dialect,
 }
 
 impl<P> SearchRuntime<P>
@@ -119,7 +131,11 @@ where
     P: EmbeddingProvider,
 {
     pub fn new(provider: P) -> Self {
-        Self { provider }
+        Self::with_dialect(provider, Dialect::new())
+    }
+
+    pub fn with_dialect(provider: P, dialect: Dialect) -> Self {
+        Self { provider, dialect }
     }
 
     pub fn provider(&self) -> &P {
@@ -128,6 +144,10 @@ where
 
     pub fn provider_mut(&mut self) -> &mut P {
         &mut self.provider
+    }
+
+    pub fn dialect(&self) -> &Dialect {
+        &self.dialect
     }
 
     pub async fn search<S>(&mut self, store: &S, query: &SearchQuery) -> Result<Vec<SearchResult>>
@@ -249,9 +269,24 @@ where
         S: DrawerStore,
     {
         let identity = request.identity.render()?;
-        let story = generate_layer1(store, request.wing.clone(), request.layer1.clone()).await?;
-
-        Ok(format!("{identity}\n\n{story}"))
+        match request.format {
+            WakeUpFormat::PlainText => {
+                let story =
+                    generate_layer1(store, request.wing.clone(), request.layer1.clone()).await?;
+                Ok(format!("{identity}\n\n{story}"))
+            }
+            WakeUpFormat::AaaK => {
+                let drawers = list_layer_drawers(store, request.wing.clone()).await?;
+                Ok(self.dialect.render_wake_up_aaak(
+                    &identity,
+                    &drawers,
+                    &WakeUpAaaKConfig {
+                        max_drawers: request.layer1.max_drawers,
+                        max_chars: request.layer1.max_chars,
+                    },
+                ))
+            }
+        }
     }
 }
 
@@ -320,7 +355,7 @@ pub async fn generate_layer1<S>(
 where
     S: DrawerStore,
 {
-    let mut drawers = store.list_drawers(&DrawerFilter { wing, ..DrawerFilter::default() }).await?;
+    let mut drawers = list_layer_drawers(store, wing).await?;
 
     if drawers.is_empty() {
         return Ok("## L1 — No memories yet.".to_owned());
@@ -377,6 +412,16 @@ where
     }
 
     Ok(lines.join("\n"))
+}
+
+async fn list_layer_drawers<S>(
+    store: &S,
+    wing: Option<mempalace_core::WingId>,
+) -> Result<Vec<DrawerRecord>>
+where
+    S: DrawerStore,
+{
+    Ok(store.list_drawers(&DrawerFilter { wing, ..DrawerFilter::default() }).await?)
 }
 
 fn rank_matches(matches: Vec<DrawerMatch>, limit: usize) -> Vec<RankedMatch> {
@@ -493,7 +538,7 @@ struct RankedMatch {
 mod tests {
     use super::{
         IdentitySource, Layer1Config, LayerRetrieveRequest, SearchError, SearchRuntime,
-        WakeUpRequest, default_identity_path, generate_layer1, render_search_results,
+        WakeUpFormat, WakeUpRequest, default_identity_path, generate_layer1, render_search_results,
         trim_similarity,
     };
     use async_trait::async_trait;
@@ -1240,6 +1285,7 @@ mod tests {
                             .to_owned(),
                     ),
                     layer1: Layer1Config { max_drawers: 4, max_chars: 3_200 },
+                    format: WakeUpFormat::PlainText,
                 },
             )
             .await
@@ -1257,6 +1303,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wake_up_defaults_to_plain_text_format() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+        let identity = IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned());
+
+        let default_rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest { identity: identity.clone(), ..WakeUpRequest::default() },
+            )
+            .await
+            .unwrap();
+        let explicit_rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: None,
+                    identity,
+                    layer1: Layer1Config::default(),
+                    format: WakeUpFormat::PlainText,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(default_rendered, explicit_rendered);
+        assert!(default_rendered.contains("## L1 — ESSENTIAL STORY"));
+    }
+
+    #[tokio::test]
     async fn wake_up_applies_wing_filter_end_to_end() {
         let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
         let store = sample_store();
@@ -1268,6 +1344,7 @@ mod tests {
                     wing: Some(WingId::new("wing_code").unwrap()),
                     identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
                     layer1: Layer1Config::default(),
+                    format: WakeUpFormat::PlainText,
                 },
             )
             .await
@@ -1279,6 +1356,157 @@ mod tests {
         assert!(rendered.contains("code.txt"));
         assert!(!rendered.contains("team.txt"));
         assert!(!rendered.contains("auth.py"));
+    }
+
+    #[tokio::test]
+    async fn wake_up_supports_aaak_format() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+
+        let rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: Some(WingId::new("wing_code").unwrap()),
+                    identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+                    layer1: Layer1Config::default(),
+                    format: WakeUpFormat::AaaK,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(rendered.contains("## L1 — AAAK STORY"));
+        assert!(rendered.contains("wing_code|auth-migration|2026-04-11|code"));
+        assert!(rendered.contains(":: 0:???|"));
+        assert!(!rendered.contains("wing_team|"));
+    }
+
+    #[tokio::test]
+    async fn wake_up_aaak_uses_configured_runtime_dialect() {
+        let runtime = SearchRuntime::with_dialect(
+            StubProvider { response: vec![embedding(0.0)] },
+            Dialect::with_entities([("alice", "ALC")]),
+        );
+        let store = StubStore {
+            drawers: vec![record(
+                "wing_code/notes/0001",
+                "wing_code",
+                "notes",
+                "fixtures/alice.txt",
+                "alice documented the migration contract.",
+                Some(10.0),
+                datetime!(2026-04-11 09:45:00 UTC),
+            )],
+        };
+
+        let rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: Some(WingId::new("wing_code").unwrap()),
+                    identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+                    layer1: Layer1Config::default(),
+                    format: WakeUpFormat::AaaK,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(rendered.contains(":: 0:ALC|"));
+    }
+
+    #[tokio::test]
+    async fn wake_up_supports_aaak_truncation_without_orphan_room_headers() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = StubStore {
+            drawers: vec![
+                record(
+                    "wing_code/alpha/0001",
+                    "wing_code",
+                    "alpha",
+                    "fixtures/alpha.txt",
+                    "Tiny note.",
+                    Some(10.0),
+                    datetime!(2026-04-11 09:45:00 UTC),
+                ),
+                record(
+                    "wing_code/beta/0002",
+                    "wing_code",
+                    "beta",
+                    "fixtures/beta.txt",
+                    "Second room should truncate before its first entry lands in the wake-up output.",
+                    Some(9.0),
+                    datetime!(2026-04-11 09:30:00 UTC),
+                ),
+            ],
+        };
+
+        let rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: Some(WingId::new("wing_code").unwrap()),
+                    identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+                    layer1: Layer1Config { max_drawers: 2, max_chars: 70 },
+                    format: WakeUpFormat::AaaK,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(rendered.contains("[alpha]"));
+        assert!(rendered.contains("... (more in L3 search)"));
+        assert!(!rendered.contains("[beta]"));
+    }
+
+    #[tokio::test]
+    async fn wake_up_aaak_honors_full_output_budget_end_to_end() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+
+        let rendered = runtime
+            .wake_up(
+                &store,
+                &WakeUpRequest {
+                    wing: Some(WingId::new("wing_code").unwrap()),
+                    identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+                    layer1: Layer1Config {
+                        max_drawers: 3,
+                        max_chars: super::char_count(
+                            "## L0 — IDENTITY\nReady.\n\n## L1 — AAAK STORY\n\n[auth-migration]\n  ... (more in L3 search)",
+                        ),
+                    },
+                    format: WakeUpFormat::AaaK,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(super::char_count(&rendered), 81);
+        assert_eq!(
+            rendered,
+            "## L0 — IDENTITY\nReady.\n\n## L1 — AAAK STORY\n\n[auth-migration]\n  ... (more in L3 search)"
+        );
+    }
+
+    #[tokio::test]
+    async fn wake_up_aaak_is_deterministic_across_repeated_runs() {
+        let runtime = SearchRuntime::new(StubProvider { response: vec![embedding(0.0)] });
+        let store = sample_store();
+        let request = WakeUpRequest {
+            wing: Some(WingId::new("wing_code").unwrap()),
+            identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
+            layer1: Layer1Config::default(),
+            format: WakeUpFormat::AaaK,
+        };
+
+        let first = runtime.wake_up(&store, &request).await.unwrap();
+        let second = runtime.wake_up(&store, &request).await.unwrap();
+        let third = runtime.wake_up(&store, &request).await.unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(second, third);
     }
 
     #[tokio::test]
@@ -1440,6 +1668,7 @@ mod tests {
                     wing: None,
                     identity: IdentitySource::Inline("## L0 — IDENTITY\nReady.".to_owned()),
                     layer1: Layer1Config::default(),
+                    format: WakeUpFormat::PlainText,
                 },
             )
             .await

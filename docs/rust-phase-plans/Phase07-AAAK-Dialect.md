@@ -26,6 +26,12 @@ Preserve AAAK shorthand rendering, deterministic formatting, and token-efficienc
 - Decide whether reverse parsing is in scope for v1.
 - If not, document the deferral clearly so the absence is not accidental.
 
+Decision for Rust v1:
+
+- Reverse parsing is intentionally deferred.
+- Phase 7 keeps AAAK rendering and wake-up generation write-only until a concrete product path needs loss-aware decode support.
+- Any Rust decode surface should return an explicit "deferred for v1" error rather than silently omitting the feature.
+
 ### 4. Token Efficiency Validation
 
 - Measure and guard token-budget behavior on fixture outputs.
@@ -40,17 +46,17 @@ Preserve AAAK shorthand rendering, deterministic formatting, and token-efficienc
 
 ## To-Do Checklist
 
-- [ ] Port AAAK formatting rules.
-- [ ] Define deterministic ordering rules for rendered output.
-- [ ] Integrate AAAK rendering into wake-up flow.
-- [ ] Decide whether reverse parsing is in scope.
+- [x] Port AAAK formatting rules.
+- [x] Define deterministic ordering rules for rendered output.
+- [x] Integrate AAAK rendering into wake-up flow.
+- [x] Decide whether reverse parsing is in scope.
 - [ ] Implement reverse parsing if retained.
-- [ ] Document deferment if reverse parsing is not retained.
-- [ ] Add AAAK golden tests.
-- [ ] Add formatting invariant tests.
-- [ ] Add token-budget tests.
-- [ ] Add long-input tests.
-- [ ] Add deterministic rendering tests across repeated runs.
+- [x] Document deferment if reverse parsing is not retained.
+- [x] Add AAAK golden tests.
+- [x] Add formatting invariant tests.
+- [x] Add token-budget tests, including full wake-up output budgets.
+- [x] Add long-input tests.
+- [x] Add deterministic rendering tests across repeated runs for both compression and wake-up output.
 
 ## Exit Gates
 
@@ -63,3 +69,4 @@ Preserve AAAK shorthand rendering, deterministic formatting, and token-efficienc
 - Quiet formatting drift from map iteration or unstable ordering.
 - Treating AAAK only as string formatting instead of a product contract.
 - Shipping wake-up output without measuring compactness budgets.
+- Leaving reverse parsing ambiguous instead of explicitly deferred.
