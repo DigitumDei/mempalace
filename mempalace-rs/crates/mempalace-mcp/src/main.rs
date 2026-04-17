@@ -1,9 +1,7 @@
 #![allow(missing_docs)]
 
-use std::io::Write;
-
 use mempalace_mcp::McpServer;
-use tokio::io::{self, AsyncBufReadExt};
+use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,8 +19,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
-        stdout.flush()?;
+        let response = serde_json::to_string(&response)?;
+        stdout.write_all(response.as_bytes()).await?;
+        stdout.write_all(b"\n").await?;
+        stdout.flush().await?;
     }
 
     Ok(())
