@@ -1,3 +1,1519 @@
-//! MCP crate placeholder for Phase 8.
+#![allow(missing_docs)]
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use blake3::Hasher;
+use mempalace_config::{ConfigLoader, MempalaceConfig};
+use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
+use mempalace_embeddings::{
+    EmbeddingError, EmbeddingProvider, EmbeddingRequest, FastembedProvider, FastembedProviderConfig,
+};
+use mempalace_graph::{
+    AddFactRequest, EntityKind, KnowledgeGraphRuntime, PalaceGraphSnapshot, QueryDirection,
+    derive_palace_graph_from_store, find_tunnels, traverse_graph,
+};
+use mempalace_search::SearchRuntime;
+use mempalace_storage::{
+    DrawerFilter, DrawerStore, DuplicateStrategy, IngestCommitRequest, StorageEngine,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use thiserror::Error;
+use time::{Date, OffsetDateTime, format_description::well_known::Rfc3339};
+use tokio::sync::Mutex;
 
 pub use mempalace_core as core;
+
+const SERVER_NAME: &str = "mempalace";
+const SERVER_VERSION: &str = "2.0.0";
+const PROTOCOL_VERSION: &str = "2024-11-05";
+const DEFAULT_DUPLICATE_THRESHOLD: f32 = 0.9;
+const DIARY_ROOM: &str = "diary";
+const DIARY_HALL: &str = "hall_diary";
+const DIARY_TOPIC_PREFIX: &str = "diary:";
+
+pub const PALACE_PROTOCOL: &str = "IMPORTANT — MemPalace Memory Protocol:\n1. ON WAKE-UP: Call mempalace_status to load palace overview + AAAK spec.\n2. BEFORE RESPONDING about any person, project, or past event: call mempalace_kg_query or mempalace_search FIRST. Never guess — verify.\n3. IF UNSURE about a fact (name, gender, age, relationship): say \"let me check\" and query the palace. Wrong is worse than slow.\n4. AFTER EACH SESSION: call mempalace_diary_write to record what happened, what you learned, what matters.\n5. WHEN FACTS CHANGE: call mempalace_kg_invalidate on the old fact, mempalace_kg_add for the new one.\n\nThis protocol ensures the AI KNOWS before it speaks. Storage is not memory — but storage + this protocol = memory.";
+
+pub const AAAK_SPEC: &str = "AAAK is a compressed memory dialect that MemPalace uses for efficient storage.\nIt is designed to be readable by both humans and LLMs without decoding.\n\nFORMAT:\n  ENTITIES: 3-letter uppercase codes. ALC=Alice, JOR=Jordan, RIL=Riley, MAX=Max, BEN=Ben.\n  EMOTIONS: *action markers* before/during text. *warm*=joy, *fierce*=determined, *raw*=vulnerable, *bloom*=tenderness.\n  STRUCTURE: Pipe-separated fields. FAM: family | PROJ: projects | ⚠: warnings/reminders.\n  DATES: ISO format (2026-03-31). COUNTS: Nx = N mentions (e.g., 570x).\n  IMPORTANCE: ★ to ★★★★★ (1-5 scale).\n  HALLS: hall_facts, hall_events, hall_discoveries, hall_preferences, hall_advice.\n  WINGS: wing_user, wing_agent, wing_team, wing_code, wing_myproject, wing_hardware, wing_ue5, wing_ai_research.\n  ROOMS: Hyphenated slugs representing named ideas (e.g., chromadb-setup, gpu-pricing).\n\nEXAMPLE:\n  FAM: ALC→♡JOR | 2D(kids): RIL(18,sports) MAX(11,chess+swimming) | BEN(contributor)\n\nRead AAAK naturally — expand codes mentally, treat *markers* as emotional context.\nWhen WRITING AAAK: use entity codes, mark emotions, keep structure tight.";
+
+#[derive(Debug, Error)]
+pub enum McpError {
+    #[error(transparent)]
+    Core(#[from] mempalace_core::MempalaceError),
+    #[error(transparent)]
+    Embeddings(#[from] EmbeddingError),
+    #[error(transparent)]
+    Search(#[from] mempalace_search::SearchError),
+    #[error(transparent)]
+    Storage(#[from] mempalace_storage::StorageError),
+    #[error(transparent)]
+    Graph(#[from] mempalace_graph::GraphError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("io error at {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+pub type Result<T> = std::result::Result<T, McpError>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolDefinition {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub input_schema: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolName {
+    Status,
+    ListWings,
+    ListRooms,
+    GetTaxonomy,
+    GetAaaKSpec,
+    KgQuery,
+    KgAdd,
+    KgInvalidate,
+    KgTimeline,
+    KgStats,
+    Traverse,
+    FindTunnels,
+    GraphStats,
+    Search,
+    CheckDuplicate,
+    AddDrawer,
+    DeleteDrawer,
+    DiaryWrite,
+    DiaryRead,
+}
+
+impl ToolName {
+    fn all() -> [Self; 19] {
+        [
+            Self::Status,
+            Self::ListWings,
+            Self::ListRooms,
+            Self::GetTaxonomy,
+            Self::GetAaaKSpec,
+            Self::KgQuery,
+            Self::KgAdd,
+            Self::KgInvalidate,
+            Self::KgTimeline,
+            Self::KgStats,
+            Self::Traverse,
+            Self::FindTunnels,
+            Self::GraphStats,
+            Self::Search,
+            Self::CheckDuplicate,
+            Self::AddDrawer,
+            Self::DeleteDrawer,
+            Self::DiaryWrite,
+            Self::DiaryRead,
+        ]
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Status => "mempalace_status",
+            Self::ListWings => "mempalace_list_wings",
+            Self::ListRooms => "mempalace_list_rooms",
+            Self::GetTaxonomy => "mempalace_get_taxonomy",
+            Self::GetAaaKSpec => "mempalace_get_aaak_spec",
+            Self::KgQuery => "mempalace_kg_query",
+            Self::KgAdd => "mempalace_kg_add",
+            Self::KgInvalidate => "mempalace_kg_invalidate",
+            Self::KgTimeline => "mempalace_kg_timeline",
+            Self::KgStats => "mempalace_kg_stats",
+            Self::Traverse => "mempalace_traverse",
+            Self::FindTunnels => "mempalace_find_tunnels",
+            Self::GraphStats => "mempalace_graph_stats",
+            Self::Search => "mempalace_search",
+            Self::CheckDuplicate => "mempalace_check_duplicate",
+            Self::AddDrawer => "mempalace_add_drawer",
+            Self::DeleteDrawer => "mempalace_delete_drawer",
+            Self::DiaryWrite => "mempalace_diary_write",
+            Self::DiaryRead => "mempalace_diary_read",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Self::all().into_iter().find(|tool| tool.as_str() == name)
+    }
+
+    fn definition(self) -> ToolDefinition {
+        match self {
+            Self::Status => ToolDefinition {
+                name: self.as_str(),
+                description: "Palace overview — total drawers, wing and room counts",
+                input_schema: json!({"type":"object","properties":{}}),
+            },
+            Self::ListWings => ToolDefinition {
+                name: self.as_str(),
+                description: "List all wings with drawer counts",
+                input_schema: json!({"type":"object","properties":{}}),
+            },
+            Self::ListRooms => ToolDefinition {
+                name: self.as_str(),
+                description: "List rooms within a wing (or all rooms if no wing given)",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{"wing":{"type":"string","description":"Wing to list rooms for (optional)"}}
+                }),
+            },
+            Self::GetTaxonomy => ToolDefinition {
+                name: self.as_str(),
+                description: "Full taxonomy: wing → room → drawer count",
+                input_schema: json!({"type":"object","properties":{}}),
+            },
+            Self::GetAaaKSpec => ToolDefinition {
+                name: self.as_str(),
+                description: "Get the AAAK dialect specification — the compressed memory format MemPalace uses. Call this if you need to read or write AAAK-compressed memories.",
+                input_schema: json!({"type":"object","properties":{}}),
+            },
+            Self::KgQuery => ToolDefinition {
+                name: self.as_str(),
+                description: "Query the knowledge graph for an entity's relationships. Returns typed facts with temporal validity. E.g. 'Max' → child_of Alice, loves chess, does swimming. Filter by date with as_of to see what was true at a point in time.",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{
+                        "entity":{"type":"string","description":"Entity to query (e.g. 'Max', 'MyProject', 'Alice')"},
+                        "as_of":{"type":"string","description":"Date filter — only facts valid at this date (YYYY-MM-DD, optional)"},
+                        "direction":{"type":"string","description":"outgoing (entity→?), incoming (?→entity), or both (default: both)"}
+                    },
+                    "required":["entity"]
+                }),
+            },
+            Self::KgAdd => ToolDefinition {
+                name: self.as_str(),
+                description: "Add a fact to the knowledge graph. Subject → predicate → object with optional time window. E.g. ('Max', 'started_school', 'Year 7', valid_from='2026-09-01').",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{
+                        "subject":{"type":"string","description":"The entity doing/being something"},
+                        "predicate":{"type":"string","description":"The relationship type (e.g. 'loves', 'works_on', 'daughter_of')"},
+                        "object":{"type":"string","description":"The entity being connected to"},
+                        "valid_from":{"type":"string","description":"When this became true (YYYY-MM-DD, optional)"},
+                        "source_closet":{"type":"string","description":"Closet ID where this fact appears (optional)"}
+                    },
+                    "required":["subject","predicate","object"]
+                }),
+            },
+            Self::KgInvalidate => ToolDefinition {
+                name: self.as_str(),
+                description: "Mark a fact as no longer true. E.g. ankle injury resolved, job ended, moved house.",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{
+                        "subject":{"type":"string","description":"Entity"},
+                        "predicate":{"type":"string","description":"Relationship"},
+                        "object":{"type":"string","description":"Connected entity"},
+                        "ended":{"type":"string","description":"When it stopped being true (YYYY-MM-DD, default: today)"}
+                    },
+                    "required":["subject","predicate","object"]
+                }),
+            },
+            Self::KgTimeline => ToolDefinition {
+                name: self.as_str(),
+                description: "Chronological timeline of facts. Shows the story of an entity (or everything) in order.",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{"entity":{"type":"string","description":"Entity to get timeline for (optional — omit for full timeline)"}}
+                }),
+            },
+            Self::KgStats => ToolDefinition {
+                name: self.as_str(),
+                description: "Knowledge graph overview: entities, triples, current vs expired facts, relationship types.",
+                input_schema: json!({"type":"object","properties":{}}),
+            },
+            Self::Traverse => ToolDefinition {
+                name: self.as_str(),
+                description: "Walk the palace graph from a room. Shows connected ideas across wings — the tunnels. Like following a thread through the palace: start at 'chromadb-setup' in wing_code, discover it connects to wing_myproject (planning) and wing_user (feelings about it).",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{
+                        "start_room":{"type":"string","description":"Room to start from (e.g. 'chromadb-setup', 'riley-school')"},
+                        "max_hops":{"type":"integer","description":"How many connections to follow (default: 2)"}
+                    },
+                    "required":["start_room"]
+                }),
+            },
+            Self::FindTunnels => ToolDefinition {
+                name: self.as_str(),
+                description: "Find rooms that bridge two wings — the hallways connecting different domains. E.g. what topics connect wing_code to wing_team?",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{
+                        "wing_a":{"type":"string","description":"First wing (optional)"},
+                        "wing_b":{"type":"string","description":"Second wing (optional)"}
+                    }
+                }),
+            },
+            Self::GraphStats => ToolDefinition {
+                name: self.as_str(),
+                description: "Palace graph overview: total rooms, tunnel connections, edges between wings.",
+                input_schema: json!({"type":"object","properties":{}}),
+            },
+            Self::Search => ToolDefinition {
+                name: self.as_str(),
+                description: "Semantic search. Returns verbatim drawer content with similarity scores.",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{
+                        "query":{"type":"string","description":"What to search for"},
+                        "limit":{"type":"integer","description":"Max results (default 5)"},
+                        "wing":{"type":"string","description":"Filter by wing (optional)"},
+                        "room":{"type":"string","description":"Filter by room (optional)"}
+                    },
+                    "required":["query"]
+                }),
+            },
+            Self::CheckDuplicate => ToolDefinition {
+                name: self.as_str(),
+                description: "Check if content already exists in the palace before filing",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{
+                        "content":{"type":"string","description":"Content to check"},
+                        "threshold":{"type":"number","description":"Similarity threshold 0-1 (default 0.9)"}
+                    },
+                    "required":["content"]
+                }),
+            },
+            Self::AddDrawer => ToolDefinition {
+                name: self.as_str(),
+                description: "File verbatim content into the palace. Checks for duplicates first.",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{
+                        "wing":{"type":"string","description":"Wing (project name)"},
+                        "room":{"type":"string","description":"Room (aspect: backend, decisions, meetings...)"},
+                        "content":{"type":"string","description":"Verbatim content to store — exact words, never summarized"},
+                        "source_file":{"type":"string","description":"Where this came from (optional)"},
+                        "added_by":{"type":"string","description":"Who is filing this (default: mcp)"}
+                    },
+                    "required":["wing","room","content"]
+                }),
+            },
+            Self::DeleteDrawer => ToolDefinition {
+                name: self.as_str(),
+                description: "Delete a drawer by ID. Irreversible.",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{"drawer_id":{"type":"string","description":"ID of the drawer to delete"}},
+                    "required":["drawer_id"]
+                }),
+            },
+            Self::DiaryWrite => ToolDefinition {
+                name: self.as_str(),
+                description: "Write to your personal agent diary in AAAK format. Your observations, thoughts, what you worked on, what matters. Each agent has their own diary with full history. Write in AAAK for compression — e.g. 'SESSION:2026-04-04|built.palace.graph+diary.tools|ALC.req:agent.diaries.in.aaak|★★★'. Use entity codes from the AAAK spec.",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{
+                        "agent_name":{"type":"string","description":"Your name — each agent gets their own diary wing"},
+                        "entry":{"type":"string","description":"Your diary entry in AAAK format — compressed, entity-coded, emotion-marked"},
+                        "topic":{"type":"string","description":"Topic tag (optional, default: general)"}
+                    },
+                    "required":["agent_name","entry"]
+                }),
+            },
+            Self::DiaryRead => ToolDefinition {
+                name: self.as_str(),
+                description: "Read your recent diary entries (in AAAK). See what past versions of yourself recorded — your journal across sessions.",
+                input_schema: json!({
+                    "type":"object",
+                    "properties":{
+                        "agent_name":{"type":"string","description":"Your name — each agent gets their own diary wing"},
+                        "last_n":{"type":"integer","description":"Number of recent entries to read (default: 10)"}
+                    },
+                    "required":["agent_name"]
+                }),
+            },
+        }
+    }
+}
+
+pub fn tool_definitions() -> Vec<ToolDefinition> {
+    ToolName::all().into_iter().map(ToolName::definition).collect()
+}
+
+#[derive(Debug, Clone)]
+pub struct McpServer<P> {
+    runtime: Arc<Mutex<McpRuntime<P>>>,
+}
+
+impl McpServer<FastembedProvider> {
+    pub async fn from_default_config(base_dir_override: Option<&Path>) -> Result<Self> {
+        let config = ConfigLoader::load_with_env(base_dir_override)?;
+        let cache_root = dirs::cache_dir()
+            .unwrap_or_else(|| PathBuf::from(".cache"))
+            .join("mempalace")
+            .join("embeddings");
+        let provider = FastembedProvider::new(
+            config.embedding_profile,
+            FastembedProviderConfig::new(cache_root),
+        );
+        Self::from_parts(config, provider).await
+    }
+}
+
+impl<P> McpServer<P>
+where
+    P: EmbeddingProvider + Send,
+{
+    pub async fn from_parts(config: MempalaceConfig, provider: P) -> Result<Self> {
+        let runtime = McpRuntime::new(config, provider).await?;
+        Ok(Self { runtime: Arc::new(Mutex::new(runtime)) })
+    }
+
+    pub async fn handle_json_value(&self, request: Value) -> Value {
+        match serde_json::from_value::<JsonRpcRequest>(request) {
+            Ok(request) => self.handle_request(request).await,
+            Err(error) => jsonrpc_error(None, ErrorCode::ParseError, error.to_string()),
+        }
+    }
+
+    pub async fn handle_line(&self, line: &str) -> Value {
+        match serde_json::from_str::<Value>(line) {
+            Ok(request) => self.handle_json_value(request).await,
+            Err(error) => jsonrpc_error(None, ErrorCode::ParseError, error.to_string()),
+        }
+    }
+
+    pub async fn handle_request(&self, request: JsonRpcRequest) -> Value {
+        match request.method.as_str() {
+            "initialize" => json!({
+                "jsonrpc":"2.0",
+                "id":request.id,
+                "result":{
+                    "protocolVersion":PROTOCOL_VERSION,
+                    "capabilities":{"tools":{}},
+                    "serverInfo":{"name":SERVER_NAME,"version":SERVER_VERSION}
+                }
+            }),
+            "notifications/initialized" => Value::Null,
+            "tools/list" => json!({
+                "jsonrpc":"2.0",
+                "id":request.id,
+                "result":{
+                    "tools":tool_definitions().into_iter().map(|tool| {
+                        json!({
+                            "name": tool.name,
+                            "description": tool.description,
+                            "inputSchema": tool.input_schema,
+                        })
+                    }).collect::<Vec<_>>()
+                }
+            }),
+            "tools/call" => match ToolCallRequest::try_from(request) {
+                Ok(call) => self.dispatch_tool(call).await,
+                Err(error) => jsonrpc_error(
+                    error.id,
+                    ErrorCode::InvalidParams,
+                    error.message.unwrap_or_else(|| "invalid tool call params".to_owned()),
+                ),
+            },
+            _ => jsonrpc_error(
+                request.id,
+                ErrorCode::MethodNotFound,
+                format!("Unknown method: {}", request.method),
+            ),
+        }
+    }
+
+    async fn dispatch_tool(&self, call: ToolCallRequest) -> Value {
+        let Some(tool) = ToolName::from_name(&call.name) else {
+            return jsonrpc_error(
+                call.id,
+                ErrorCode::MethodNotFound,
+                format!("Unknown tool: {}", call.name),
+            );
+        };
+
+        let mut runtime = self.runtime.lock().await;
+        let result = match tool {
+            ToolName::Status => runtime.tool_status().await,
+            ToolName::ListWings => runtime.tool_list_wings().await,
+            ToolName::ListRooms => runtime.tool_list_rooms(&call.arguments).await,
+            ToolName::GetTaxonomy => runtime.tool_get_taxonomy().await,
+            ToolName::GetAaaKSpec => runtime.tool_get_aaak_spec().await,
+            ToolName::KgQuery => runtime.tool_kg_query(&call.arguments).await,
+            ToolName::KgAdd => runtime.tool_kg_add(&call.arguments).await,
+            ToolName::KgInvalidate => runtime.tool_kg_invalidate(&call.arguments).await,
+            ToolName::KgTimeline => runtime.tool_kg_timeline(&call.arguments).await,
+            ToolName::KgStats => runtime.tool_kg_stats().await,
+            ToolName::Traverse => runtime.tool_traverse(&call.arguments).await,
+            ToolName::FindTunnels => runtime.tool_find_tunnels(&call.arguments).await,
+            ToolName::GraphStats => runtime.tool_graph_stats().await,
+            ToolName::Search => runtime.tool_search(&call.arguments).await,
+            ToolName::CheckDuplicate => runtime.tool_check_duplicate(&call.arguments).await,
+            ToolName::AddDrawer => runtime.tool_add_drawer(&call.arguments).await,
+            ToolName::DeleteDrawer => runtime.tool_delete_drawer(&call.arguments).await,
+            ToolName::DiaryWrite => runtime.tool_diary_write(&call.arguments).await,
+            ToolName::DiaryRead => runtime.tool_diary_read(&call.arguments).await,
+        };
+
+        match result {
+            Ok(value) => json!({
+                "jsonrpc":"2.0",
+                "id":call.id,
+                "result":{"content":[{"type":"text","text":serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_owned())}]}
+            }),
+            Err(ToolError::InvalidParams(message)) => {
+                jsonrpc_error(call.id, ErrorCode::InvalidParams, message)
+            }
+            Err(ToolError::Internal(error)) => {
+                jsonrpc_error(call.id, ErrorCode::InternalError, error.to_string())
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct McpRuntime<P> {
+    config: MempalaceConfig,
+    storage: StorageEngine,
+    search: SearchRuntime<P>,
+}
+
+impl<P> McpRuntime<P>
+where
+    P: EmbeddingProvider + Send,
+{
+    async fn new(config: MempalaceConfig, provider: P) -> Result<Self> {
+        let storage = StorageEngine::open(&config.palace_path, config.embedding_profile).await?;
+        Ok(Self { config, storage, search: SearchRuntime::new(provider) })
+    }
+
+    async fn tool_status(&mut self) -> ToolResult<Value> {
+        let drawers = self.list_all_drawers().await?;
+        let mut wings = BTreeMap::<String, usize>::new();
+        let mut rooms = BTreeMap::<String, usize>::new();
+        for drawer in &drawers {
+            *wings.entry(drawer.wing.as_str().to_owned()).or_default() += 1;
+            *rooms.entry(drawer.room.as_str().to_owned()).or_default() += 1;
+        }
+        Ok(json!({
+            "total_drawers": drawers.len(),
+            "wings": wings,
+            "rooms": rooms,
+            "palace_path": self.config.palace_path,
+            "protocol": PALACE_PROTOCOL,
+            "aaak_dialect": AAAK_SPEC,
+        }))
+    }
+
+    async fn tool_list_wings(&mut self) -> ToolResult<Value> {
+        let drawers = self.list_all_drawers().await?;
+        let mut wings = BTreeMap::<String, usize>::new();
+        for drawer in drawers {
+            *wings.entry(drawer.wing.as_str().to_owned()).or_default() += 1;
+        }
+        Ok(json!({ "wings": wings }))
+    }
+
+    async fn tool_list_rooms(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let wing = optional_string(arguments, "wing")?;
+        let filter = DrawerFilter {
+            wing: wing.as_deref().map(parse_wing_id).transpose()?,
+            ..DrawerFilter::default()
+        };
+        let drawers = self.storage.drawer_store().list_drawers(&filter).await.map_tool()?;
+        let mut rooms = BTreeMap::<String, usize>::new();
+        for drawer in drawers {
+            *rooms.entry(drawer.room.as_str().to_owned()).or_default() += 1;
+        }
+        Ok(json!({
+            "wing": wing.unwrap_or_else(|| "all".to_owned()),
+            "rooms": rooms,
+        }))
+    }
+
+    async fn tool_get_taxonomy(&mut self) -> ToolResult<Value> {
+        let drawers = self.list_all_drawers().await?;
+        let mut taxonomy = BTreeMap::<String, BTreeMap<String, usize>>::new();
+        for drawer in drawers {
+            *taxonomy
+                .entry(drawer.wing.as_str().to_owned())
+                .or_default()
+                .entry(drawer.room.as_str().to_owned())
+                .or_default() += 1;
+        }
+        Ok(json!({ "taxonomy": taxonomy }))
+    }
+
+    async fn tool_get_aaak_spec(&mut self) -> ToolResult<Value> {
+        Ok(json!({ "aaak_spec": AAAK_SPEC }))
+    }
+
+    async fn tool_search(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let query = required_string(arguments, "query")?;
+        let limit = optional_usize(arguments, "limit")?.unwrap_or(5);
+        let wing =
+            optional_string(arguments, "wing")?.map(|value| parse_wing_id(&value)).transpose()?;
+        let room =
+            optional_string(arguments, "room")?.map(|value| parse_room_id(&value)).transpose()?;
+        let results = self
+            .search
+            .search(
+                self.storage.drawer_store(),
+                &SearchQuery {
+                    text: query.clone(),
+                    wing: wing.clone(),
+                    room: room.clone(),
+                    limit,
+                    profile: self.config.embedding_profile,
+                },
+            )
+            .await
+            .map_tool()?;
+
+        let payload = json!({
+            "query": query,
+            "filters": {
+                "wing": wing.map(|value| value.to_string()),
+                "room": room.map(|value| value.to_string()),
+            },
+            "results": results.into_iter().map(|result| json!({
+                "wing": result.wing,
+                "room": result.room,
+                "text": result.content,
+                "source_file": result.source_file,
+            })).collect::<Vec<_>>()
+        });
+        Ok(payload)
+    }
+
+    async fn tool_check_duplicate(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let content = required_string(arguments, "content")?;
+        let threshold =
+            optional_f32(arguments, "threshold")?.unwrap_or(DEFAULT_DUPLICATE_THRESHOLD);
+        let matches = self.find_duplicates(&content, threshold).await?;
+        Ok(json!({
+            "is_duplicate": !matches.is_empty(),
+            "matches": matches,
+        }))
+    }
+
+    async fn tool_add_drawer(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let wing = parse_wing_id(&required_string(arguments, "wing")?)?;
+        let room = parse_room_id(&required_string(arguments, "room")?)?;
+        let content = required_string(arguments, "content")?;
+        let source_file = optional_string(arguments, "source_file")?.unwrap_or_default();
+        let added_by = optional_string(arguments, "added_by")?.unwrap_or_else(|| "mcp".to_owned());
+
+        let duplicates = self.find_duplicates(&content, DEFAULT_DUPLICATE_THRESHOLD).await?;
+        if !duplicates.is_empty() {
+            return Ok(json!({
+                "success": false,
+                "reason": "duplicate",
+                "matches": duplicates,
+            }));
+        }
+
+        let now = OffsetDateTime::now_utc();
+        let drawer_id = generated_drawer_id("drawer", wing.as_str(), room.as_str(), &content, now)?;
+        let record = self
+            .build_drawer_record(
+                drawer_id.clone(),
+                wing.clone(),
+                room.clone(),
+                None,
+                None,
+                source_file.clone(),
+                added_by,
+                "mcp".to_owned(),
+                content,
+                now,
+            )
+            .await?;
+
+        self.storage
+            .commit_ingest(IngestCommitRequest {
+                ingest_kind: "mcp_write".to_owned(),
+                source_key: format!("mcp:{}", drawer_id.as_str()),
+                source_file,
+                content_hash: record.content_hash.clone(),
+                drawers: vec![record],
+                duplicate_strategy: DuplicateStrategy::Error,
+            })
+            .await
+            .map_tool()?;
+
+        Ok(json!({
+            "success": true,
+            "drawer_id": drawer_id,
+            "wing": wing,
+            "room": room,
+        }))
+    }
+
+    async fn tool_delete_drawer(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let drawer_id = parse_drawer_id(&required_string(arguments, "drawer_id")?)?;
+        let deleted = self
+            .storage
+            .drawer_store()
+            .delete_drawers(std::slice::from_ref(&drawer_id))
+            .await
+            .map_tool()?;
+        if deleted == 0 {
+            return Ok(json!({
+                "success": false,
+                "error": format!("Drawer not found: {}", drawer_id.as_str()),
+            }));
+        }
+        Ok(json!({ "success": true, "drawer_id": drawer_id }))
+    }
+
+    async fn tool_diary_write(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let agent_name = required_string(arguments, "agent_name")?;
+        let entry = required_string(arguments, "entry")?;
+        let topic = optional_string(arguments, "topic")?.unwrap_or_else(|| "general".to_owned());
+        let wing = parse_wing_id(&diary_wing_name(&agent_name))?;
+        let room = parse_room_id(DIARY_ROOM)?;
+        let now = OffsetDateTime::now_utc();
+        let drawer_id = generated_drawer_id("diary", wing.as_str(), room.as_str(), &entry, now)?;
+        let source_file = format!("{DIARY_TOPIC_PREFIX}{topic}");
+        let record = self
+            .build_drawer_record(
+                drawer_id.clone(),
+                wing,
+                room,
+                Some(DIARY_HALL.to_owned()),
+                Some(now.date()),
+                source_file.clone(),
+                agent_name.clone(),
+                "diary".to_owned(),
+                entry,
+                now,
+            )
+            .await?;
+
+        self.storage
+            .commit_ingest(IngestCommitRequest {
+                ingest_kind: "diary".to_owned(),
+                source_key: format!("diary:{}", drawer_id.as_str()),
+                source_file,
+                content_hash: record.content_hash.clone(),
+                drawers: vec![record],
+                duplicate_strategy: DuplicateStrategy::Error,
+            })
+            .await
+            .map_tool()?;
+
+        Ok(json!({
+            "success": true,
+            "entry_id": drawer_id,
+            "agent": agent_name,
+            "topic": topic,
+            "timestamp": now.format(&Rfc3339).map_tool_invalid("invalid diary timestamp")?,
+        }))
+    }
+
+    async fn tool_diary_read(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let agent_name = required_string(arguments, "agent_name")?;
+        let last_n = optional_usize(arguments, "last_n")?.unwrap_or(10);
+        let wing = parse_wing_id(&diary_wing_name(&agent_name))?;
+        let room = parse_room_id(DIARY_ROOM)?;
+        let mut drawers = self
+            .storage
+            .drawer_store()
+            .list_drawers(&DrawerFilter {
+                wing: Some(wing),
+                room: Some(room),
+                ..DrawerFilter::default()
+            })
+            .await
+            .map_tool()?;
+
+        if drawers.is_empty() {
+            return Ok(json!({
+                "agent": agent_name,
+                "entries": [],
+                "message": "No diary entries yet.",
+            }));
+        }
+
+        drawers.sort_by(|left, right| right.filed_at.cmp(&left.filed_at));
+        let total = drawers.len();
+        let entries = drawers
+            .into_iter()
+            .take(last_n)
+            .map(|drawer| {
+                let topic = drawer
+                    .source_file
+                    .strip_prefix(DIARY_TOPIC_PREFIX)
+                    .unwrap_or("general")
+                    .to_owned();
+                let date = drawer
+                    .date
+                    .map(format_date)
+                    .unwrap_or_else(|| drawer.filed_at.date().to_string());
+                let timestamp =
+                    drawer.filed_at.format(&Rfc3339).map_tool_invalid("invalid timestamp")?;
+                Ok::<Value, ToolError>(json!({
+                    "date": date,
+                    "timestamp": timestamp,
+                    "topic": topic,
+                    "content": drawer.content,
+                }))
+            })
+            .collect::<ToolResult<Vec<_>>>()?;
+
+        Ok(json!({
+            "agent": agent_name,
+            "entries": entries,
+            "total": total,
+            "showing": total.min(last_n),
+        }))
+    }
+
+    async fn tool_traverse(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let start_room = required_string(arguments, "start_room")?;
+        let max_hops = optional_usize(arguments, "max_hops")?.unwrap_or(2);
+        let snapshot = self.graph_snapshot().await?;
+        if !snapshot.nodes.contains_key(&start_room) {
+            return Ok(json!({
+                "error": format!("Room '{}' not found", start_room),
+                "suggestions": fuzzy_match_rooms(&start_room, &snapshot),
+            }));
+        }
+        Ok(json!(traverse_graph(&snapshot, &start_room, max_hops)))
+    }
+
+    async fn tool_find_tunnels(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let wing_a = optional_string(arguments, "wing_a")?;
+        let wing_b = optional_string(arguments, "wing_b")?;
+        let snapshot = self.graph_snapshot().await?;
+        Ok(json!(find_tunnels(&snapshot, wing_a.as_deref(), wing_b.as_deref())))
+    }
+
+    async fn tool_graph_stats(&mut self) -> ToolResult<Value> {
+        let snapshot = self.graph_snapshot().await?;
+        Ok(serde_json::to_value(snapshot.stats).map_tool_internal()?)
+    }
+
+    async fn tool_kg_query(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let entity = required_string(arguments, "entity")?;
+        let as_of =
+            optional_string(arguments, "as_of")?.map(|value| parse_date(&value)).transpose()?;
+        let direction =
+            parse_direction(optional_string(arguments, "direction")?.as_deref().unwrap_or("both"))?;
+        let runtime = KnowledgeGraphRuntime::new(self.storage.operational_store());
+        let facts = runtime.query_entity(&entity, as_of, direction).map_tool_internal()?;
+        Ok(json!({
+            "entity": entity,
+            "as_of": optional_string(arguments, "as_of")?,
+            "facts": facts,
+            "count": facts.len(),
+        }))
+    }
+
+    async fn tool_kg_add(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let subject = required_string(arguments, "subject")?;
+        let predicate = required_string(arguments, "predicate")?;
+        let object = required_string(arguments, "object")?;
+        let valid_from_text = optional_string(arguments, "valid_from")?;
+        let valid_from = valid_from_text.as_deref().map(parse_date).transpose()?;
+        let source_closet = optional_string(arguments, "source_closet")?;
+        let source_drawer_id = source_closet.as_deref().map(parse_drawer_id).transpose()?;
+        let runtime = KnowledgeGraphRuntime::new(self.storage.operational_store());
+        let triple_id = runtime
+            .add_fact(
+                AddFactRequest {
+                    subject: subject.clone(),
+                    subject_type: infer_entity_kind(&subject),
+                    predicate: predicate.clone(),
+                    object: object.clone(),
+                    object_type: infer_entity_kind(&object),
+                    valid_from,
+                    valid_to: None,
+                    confidence: 1.0,
+                    source_drawer_id,
+                    source_file: None,
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .map_tool_internal()?;
+        Ok(json!({
+            "success": true,
+            "triple_id": triple_id,
+            "fact": format!("{subject} → {predicate} → {object}"),
+        }))
+    }
+
+    async fn tool_kg_invalidate(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let subject = required_string(arguments, "subject")?;
+        let predicate = required_string(arguments, "predicate")?;
+        let object = required_string(arguments, "object")?;
+        let ended_text = optional_string(arguments, "ended")?;
+        let ended = ended_text
+            .as_deref()
+            .map(parse_date)
+            .transpose()?
+            .unwrap_or_else(|| OffsetDateTime::now_utc().date());
+        let runtime = KnowledgeGraphRuntime::new(self.storage.operational_store());
+        runtime
+            .invalidate(&subject, &predicate, &object, ended, OffsetDateTime::now_utc())
+            .map_tool_internal()?;
+        Ok(json!({
+            "success": true,
+            "fact": format!("{subject} → {predicate} → {object}"),
+            "ended": ended_text.unwrap_or_else(|| "today".to_owned()),
+        }))
+    }
+
+    async fn tool_kg_timeline(&mut self, arguments: &Value) -> ToolResult<Value> {
+        let entity = optional_string(arguments, "entity")?;
+        let runtime = KnowledgeGraphRuntime::new(self.storage.operational_store());
+        let timeline = runtime.timeline(entity.as_deref()).map_tool_internal()?;
+        Ok(json!({
+            "entity": entity.clone().unwrap_or_else(|| "all".to_owned()),
+            "timeline": timeline,
+            "count": timeline.len(),
+        }))
+    }
+
+    async fn tool_kg_stats(&mut self) -> ToolResult<Value> {
+        let runtime = KnowledgeGraphRuntime::new(self.storage.operational_store());
+        Ok(serde_json::to_value(runtime.stats().map_tool_internal()?).map_tool_internal()?)
+    }
+
+    async fn list_all_drawers(&self) -> ToolResult<Vec<DrawerRecord>> {
+        self.storage.drawer_store().list_drawers(&DrawerFilter::default()).await.map_tool()
+    }
+
+    async fn graph_snapshot(&self) -> ToolResult<PalaceGraphSnapshot> {
+        derive_palace_graph_from_store(self.storage.drawer_store()).await.map_tool_internal()
+    }
+
+    async fn find_duplicates(&mut self, content: &str, threshold: f32) -> ToolResult<Vec<Value>> {
+        let query = SearchQuery {
+            text: content.to_owned(),
+            wing: None,
+            room: None,
+            limit: 5,
+            profile: self.config.embedding_profile,
+        };
+        let results = self.search.search(self.storage.drawer_store(), &query).await.map_tool()?;
+        Ok(results
+            .into_iter()
+            .filter(|result| result.score >= threshold)
+            .map(|result| {
+                let snippet = if result.content.chars().count() > 200 {
+                    format!("{}...", result.content.chars().take(200).collect::<String>())
+                } else {
+                    result.content
+                };
+                json!({
+                    "id": result.drawer_id,
+                    "wing": result.wing,
+                    "room": result.room,
+                    "similarity": round_similarity(result.score),
+                    "content": snippet,
+                })
+            })
+            .collect())
+    }
+
+    async fn build_drawer_record(
+        &mut self,
+        id: DrawerId,
+        wing: WingId,
+        room: RoomId,
+        hall: Option<String>,
+        date: Option<Date>,
+        source_file: String,
+        added_by: String,
+        ingest_mode: String,
+        content: String,
+        filed_at: OffsetDateTime,
+    ) -> ToolResult<DrawerRecord> {
+        let request = EmbeddingRequest::new(vec![content.clone()]).map_tool_internal()?;
+        let response = self.search.provider_mut().embed(&request).map_tool_internal()?;
+        let embedding = response.vectors().first().cloned().ok_or_else(|| {
+            ToolError::Internal(McpError::Embeddings(EmbeddingError::ProviderContract(
+                "provider returned no vector for single-drawer ingest".to_owned(),
+            )))
+        })?;
+        Ok(DrawerRecord {
+            id,
+            wing,
+            room,
+            hall,
+            date,
+            source_file,
+            chunk_index: 0,
+            ingest_mode,
+            extract_mode: None,
+            added_by,
+            filed_at,
+            importance: None,
+            emotional_weight: None,
+            weight: None,
+            content: content.clone(),
+            content_hash: hash_text(&content),
+            embedding,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct JsonRpcRequest {
+    pub jsonrpc: Option<String>,
+    pub id: Option<Value>,
+    pub method: String,
+    #[serde(default)]
+    pub params: Value,
+}
+
+#[derive(Debug, Clone)]
+struct ToolCallRequest {
+    id: Option<Value>,
+    name: String,
+    arguments: Value,
+}
+
+impl TryFrom<JsonRpcRequest> for ToolCallRequest {
+    type Error = RequestValidationError;
+
+    fn try_from(request: JsonRpcRequest) -> std::result::Result<Self, Self::Error> {
+        let params = match request.params {
+            Value::Null => json!({}),
+            value => value,
+        };
+        let params = params.as_object().ok_or_else(|| RequestValidationError {
+            id: request.id.clone(),
+            message: Some("tools/call params must be an object".to_owned()),
+        })?;
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RequestValidationError {
+                id: request.id.clone(),
+                message: Some("tools/call params.name must be a string".to_owned()),
+            })?
+            .to_owned();
+        let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+        if !arguments.is_object() {
+            return Err(RequestValidationError {
+                id: request.id,
+                message: Some("tools/call params.arguments must be an object".to_owned()),
+            });
+        }
+        Ok(Self { id: request.id, name, arguments })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RequestValidationError {
+    id: Option<Value>,
+    message: Option<String>,
+}
+
+#[derive(Debug)]
+enum ToolError {
+    InvalidParams(String),
+    Internal(McpError),
+}
+
+type ToolResult<T> = std::result::Result<T, ToolError>;
+
+trait ToolResultExt<T> {
+    fn map_tool(self) -> ToolResult<T>;
+    fn map_tool_internal(self) -> ToolResult<T>;
+    fn map_tool_invalid(self, message: &'static str) -> ToolResult<T>;
+}
+
+impl<T, E> ToolResultExt<T> for std::result::Result<T, E>
+where
+    E: Into<McpError>,
+{
+    fn map_tool(self) -> ToolResult<T> {
+        self.map_err(|error| ToolError::Internal(error.into()))
+    }
+
+    fn map_tool_internal(self) -> ToolResult<T> {
+        self.map_tool()
+    }
+
+    fn map_tool_invalid(self, message: &'static str) -> ToolResult<T> {
+        self.map_err(|_| ToolError::InvalidParams(message.to_owned()))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ErrorCode {
+    ParseError = -32700,
+    InvalidParams = -32602,
+    MethodNotFound = -32601,
+    InternalError = -32000,
+}
+
+fn jsonrpc_error(id: Option<Value>, code: ErrorCode, message: String) -> Value {
+    json!({
+        "jsonrpc":"2.0",
+        "id":id,
+        "error":{"code":code as i32,"message":message}
+    })
+}
+
+fn required_string(arguments: &Value, field: &'static str) -> ToolResult<String> {
+    arguments
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| ToolError::InvalidParams(format!("missing required string field `{field}`")))
+}
+
+fn optional_string(arguments: &Value, field: &'static str) -> ToolResult<Option<String>> {
+    match arguments.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(ToolError::InvalidParams(format!("field `{field}` must be a string"))),
+    }
+}
+
+fn optional_usize(arguments: &Value, field: &'static str) -> ToolResult<Option<usize>> {
+    match arguments.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(|value| value as usize)
+            .ok_or_else(|| ToolError::InvalidParams(format!("field `{field}` must be an integer")))
+            .map(Some),
+    }
+}
+
+fn optional_f32(arguments: &Value, field: &'static str) -> ToolResult<Option<f32>> {
+    match arguments.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_f64()
+            .map(|value| value as f32)
+            .ok_or_else(|| ToolError::InvalidParams(format!("field `{field}` must be a number")))
+            .map(Some),
+    }
+}
+
+fn parse_wing_id(value: &str) -> ToolResult<WingId> {
+    WingId::new(value).map_err(|error| ToolError::InvalidParams(error.to_string()))
+}
+
+fn parse_room_id(value: &str) -> ToolResult<RoomId> {
+    RoomId::new(value).map_err(|error| ToolError::InvalidParams(error.to_string()))
+}
+
+fn parse_drawer_id(value: &str) -> ToolResult<DrawerId> {
+    DrawerId::new(value).map_err(|error| ToolError::InvalidParams(error.to_string()))
+}
+
+fn parse_date(value: &str) -> ToolResult<Date> {
+    Date::parse(value, &time::macros::format_description!("[year]-[month]-[day]")).map_err(|_| {
+        ToolError::InvalidParams(format!("invalid date `{value}`; expected YYYY-MM-DD"))
+    })
+}
+
+fn parse_direction(value: &str) -> ToolResult<QueryDirection> {
+    match value {
+        "outgoing" => Ok(QueryDirection::Outgoing),
+        "incoming" => Ok(QueryDirection::Incoming),
+        "both" => Ok(QueryDirection::Both),
+        other => Err(ToolError::InvalidParams(format!(
+            "invalid direction `{other}`; expected outgoing, incoming, or both"
+        ))),
+    }
+}
+
+fn format_date(value: Date) -> String {
+    value.to_string()
+}
+
+fn round_similarity(value: f32) -> f32 {
+    (value * 1_000.0).round() / 1_000.0
+}
+
+fn generated_drawer_id(
+    prefix: &str,
+    wing: &str,
+    room: &str,
+    content: &str,
+    now: OffsetDateTime,
+) -> ToolResult<DrawerId> {
+    let mut hasher = Hasher::new();
+    hasher.update(content.as_bytes());
+    hasher.update(now.unix_timestamp_nanos().to_string().as_bytes());
+    let suffix = hasher.finalize().to_hex().chars().take(16).collect::<String>();
+    DrawerId::new(format!("{prefix}_{wing}_{room}_{suffix}"))
+        .map_err(|error| ToolError::InvalidParams(error.to_string()))
+}
+
+fn hash_text(content: &str) -> String {
+    blake3::hash(content.as_bytes()).to_hex().to_string()
+}
+
+fn infer_entity_kind(name: &str) -> EntityKind {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return EntityKind::Unknown;
+    }
+    if name.chars().any(|ch| ch.is_ascii_digit()) {
+        return EntityKind::Concept;
+    }
+    if !trimmed.contains(' ')
+        && !trimmed.contains('-')
+        && trimmed.chars().next().is_some_and(|ch| ch.is_ascii_uppercase())
+    {
+        return EntityKind::Person;
+    }
+    EntityKind::Concept
+}
+
+fn diary_wing_name(agent_name: &str) -> String {
+    format!("wing_{}", slugify(agent_name))
+}
+
+fn slugify(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
+}
+
+fn fuzzy_match_rooms(query: &str, snapshot: &PalaceGraphSnapshot) -> Vec<String> {
+    let lower = query.to_ascii_lowercase();
+    let mut scored = snapshot
+        .nodes
+        .keys()
+        .filter_map(|room| {
+            let room_lower = room.to_ascii_lowercase();
+            if room_lower.contains(&lower) {
+                Some((room.clone(), 2usize))
+            } else if lower
+                .split('-')
+                .any(|segment| !segment.is_empty() && room_lower.contains(segment))
+            {
+                Some((room.clone(), 1usize))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+    scored.into_iter().take(5).map(|entry| entry.0).collect()
+}
+
+pub fn decode_tool_payload(response: &Value) -> Option<Value> {
+    let text =
+        response.get("result")?.get("content")?.as_array()?.first()?.get("text")?.as_str()?;
+    serde_json::from_str(text).ok()
+}
+
+pub fn phase0_tools_fixture() -> Result<Value> {
+    let path = fixture_root().join("inventory").join("mcp-tools.json");
+    let body =
+        fs::read_to_string(&path).map_err(|source| McpError::Io { path: path.clone(), source })?;
+    serde_json::from_str(&body).map_err(McpError::from)
+}
+
+pub fn phase0_contract_fixture() -> Result<Value> {
+    let path = fixture_root().join("goldens").join("mcp-contract.json");
+    let body =
+        fs::read_to_string(&path).map_err(|source| McpError::Io { path: path.clone(), source })?;
+    serde_json::from_str(&body).map_err(McpError::from)
+}
+
+fn fixture_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/phase0")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mempalace_embeddings::{
+        EmbeddingProvider, EmbeddingResponse, StartupValidation, StartupValidationStatus,
+    };
+    use tempfile::tempdir;
+    use time::macros::{date, datetime};
+
+    #[derive(Debug, Clone)]
+    struct StubProvider {
+        profile: EmbeddingProfile,
+        seed: [f32; 4],
+    }
+
+    impl StubProvider {
+        fn vector(&self) -> Vec<f32> {
+            let mut values = Vec::with_capacity(self.profile.metadata().dimensions);
+            while values.len() < self.profile.metadata().dimensions {
+                values.extend(self.seed);
+            }
+            values.truncate(self.profile.metadata().dimensions);
+            values
+        }
+    }
+
+    impl EmbeddingProvider for StubProvider {
+        fn profile(&self) -> &'static mempalace_core::EmbeddingProfileMetadata {
+            self.profile.metadata()
+        }
+
+        fn startup_validation(&self) -> mempalace_embeddings::Result<StartupValidation> {
+            Ok(StartupValidation {
+                status: StartupValidationStatus::Ready,
+                cache_root: PathBuf::from("/tmp/stub"),
+                model_id: self.profile.metadata().model_id,
+                detail: "stub".to_owned(),
+            })
+        }
+
+        fn embed(
+            &mut self,
+            request: &EmbeddingRequest,
+        ) -> mempalace_embeddings::Result<EmbeddingResponse> {
+            EmbeddingResponse::from_vectors(
+                (0..request.len()).map(|_| self.vector()).collect(),
+                self.profile.metadata().dimensions,
+                self.profile,
+                self.profile.metadata().model_id,
+            )
+        }
+    }
+
+    async fn test_server() -> McpServer<StubProvider> {
+        let tempdir = tempdir().unwrap();
+        let palace_path = tempdir.keep().join("palace");
+        let config = MempalaceConfig {
+            schema_version: 1,
+            collection_name: "mempalace_drawers".to_owned(),
+            palace_path,
+            embedding_profile: EmbeddingProfile::Balanced,
+        };
+        let server = McpServer::from_parts(
+            config,
+            StubProvider { profile: EmbeddingProfile::Balanced, seed: [1.0, 0.0, 0.0, 0.0] },
+        )
+        .await
+        .unwrap();
+        seed_drawers(&server).await;
+        seed_knowledge_graph(&server).await;
+        server
+    }
+
+    async fn seed_drawers(server: &McpServer<StubProvider>) {
+        let mut runtime = server.runtime.lock().await;
+        let now = datetime!(2026-04-11 09:00:00 UTC);
+        let drawers = vec![
+            DrawerRecord {
+                id: DrawerId::new("wing_code/auth-migration/0001").unwrap(),
+                wing: WingId::new("wing_code").unwrap(),
+                room: RoomId::new("auth-migration").unwrap(),
+                hall: Some("hall_facts".to_owned()),
+                date: Some(date!(2026 - 04 - 10)),
+                source_file: "code.txt".to_owned(),
+                chunk_index: 0,
+                ingest_mode: "fixtures".to_owned(),
+                extract_mode: None,
+                added_by: "tests".to_owned(),
+                filed_at: now,
+                importance: None,
+                emotional_weight: None,
+                weight: None,
+                content: "Code notes: auth-migration keeps search filter semantics exact while storage changes underneath.".to_owned(),
+                content_hash: hash_text("code"),
+                embedding: vec![1.0; EmbeddingProfile::Balanced.metadata().dimensions],
+            },
+            DrawerRecord {
+                id: DrawerId::new("wing_team/auth-migration/0001").unwrap(),
+                wing: WingId::new("wing_team").unwrap(),
+                room: RoomId::new("auth-migration").unwrap(),
+                hall: Some("hall_events".to_owned()),
+                date: Some(date!(2026 - 04 - 11)),
+                source_file: "team.txt".to_owned(),
+                chunk_index: 0,
+                ingest_mode: "fixtures".to_owned(),
+                extract_mode: None,
+                added_by: "tests".to_owned(),
+                filed_at: now,
+                importance: None,
+                emotional_weight: None,
+                weight: None,
+                content: "The team decided the auth-migration must preserve CLI and MCP parity.".to_owned(),
+                content_hash: hash_text("team"),
+                embedding: vec![1.0; EmbeddingProfile::Balanced.metadata().dimensions],
+            },
+        ];
+        runtime
+            .storage
+            .drawer_store()
+            .put_drawers(&drawers, DuplicateStrategy::Error)
+            .await
+            .unwrap();
+    }
+
+    async fn seed_knowledge_graph(server: &McpServer<StubProvider>) {
+        let runtime = server.runtime.lock().await;
+        let kg = KnowledgeGraphRuntime::new(runtime.storage.operational_store());
+        kg.add_fact(
+            AddFactRequest {
+                subject: "Rust Rewrite".to_owned(),
+                subject_type: EntityKind::Project,
+                predicate: "preserves".to_owned(),
+                object: "CLI Parity".to_owned(),
+                object_type: EntityKind::Concept,
+                valid_from: Some(date!(2026 - 04 - 10)),
+                valid_to: None,
+                confidence: 1.0,
+                source_drawer_id: None,
+                source_file: None,
+            },
+            datetime!(2026-04-10 10:00:00 UTC),
+        )
+        .unwrap();
+    }
+
+    fn tool_call(id: i64, name: &str, arguments: Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: Some("2.0".to_owned()),
+            id: Some(json!(id)),
+            method: "tools/call".to_owned(),
+            params: json!({"name": name, "arguments": arguments}),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_inventory_matches_phase0_fixture() {
+        let expected = phase0_tools_fixture().unwrap();
+        let actual = tool_definitions()
+            .into_iter()
+            .map(|tool| {
+                (
+                    tool.name.to_owned(),
+                    json!({
+                        "description": tool.description,
+                        "input_schema": tool.input_schema,
+                    }),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(serde_json::to_value(actual).unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn initialize_matches_phase0_contract_shape() {
+        let fixture = phase0_contract_fixture().unwrap();
+        let server = test_server().await;
+        let response = server
+            .handle_request(JsonRpcRequest {
+                jsonrpc: Some("2.0".to_owned()),
+                id: Some(json!(1)),
+                method: "initialize".to_owned(),
+                params: json!({}),
+            })
+            .await;
+        assert_eq!(response, fixture["initialize"]);
+    }
+
+    #[tokio::test]
+    async fn search_tool_uses_phase0_shape_without_similarity() {
+        let server = test_server().await;
+        let response = server
+            .handle_request(tool_call(
+                4,
+                "mempalace_search",
+                json!({"query":"auth migration parity","limit":2}),
+            ))
+            .await;
+        let payload = decode_tool_payload(&response).unwrap();
+        assert_eq!(payload["query"], "auth migration parity");
+        assert_eq!(payload["filters"], json!({"wing":null,"room":null}));
+        assert!(
+            payload["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|result| result.get("similarity").is_none())
+        );
+    }
+
+    #[tokio::test]
+    async fn status_tool_reports_protocol_and_counts() {
+        let server = test_server().await;
+        let response = server.handle_request(tool_call(3, "mempalace_status", json!({}))).await;
+        let payload = decode_tool_payload(&response).unwrap();
+        assert_eq!(payload["total_drawers"], 2);
+        assert_eq!(payload["protocol"], PALACE_PROTOCOL);
+        assert_eq!(payload["aaak_dialect"], AAAK_SPEC);
+    }
+
+    #[tokio::test]
+    async fn invalid_direction_returns_invalid_params() {
+        let server = test_server().await;
+        let response = server
+            .handle_request(tool_call(
+                7,
+                "mempalace_kg_query",
+                json!({"entity":"Rust Rewrite","direction":"sideways"}),
+            ))
+            .await;
+        assert_eq!(response["error"]["code"], json!(-32602));
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_uses_phase0_error_code() {
+        let fixture = phase0_contract_fixture().unwrap();
+        let server = test_server().await;
+        let response = server.handle_request(tool_call(5, "mempalace_nope", json!({}))).await;
+        assert_eq!(response, fixture["error"]);
+    }
+
+    #[tokio::test]
+    async fn diary_tools_round_trip_entries() {
+        let server = test_server().await;
+        let write = server
+            .handle_request(tool_call(
+                8,
+                "mempalace_diary_write",
+                json!({"agent_name":"Codex Bot","entry":"SESSION:2026-04-11|phase8.done","topic":"phase8"}),
+            ))
+            .await;
+        let write_payload = decode_tool_payload(&write).unwrap();
+        assert_eq!(write_payload["success"], true);
+
+        let read = server
+            .handle_request(tool_call(
+                9,
+                "mempalace_diary_read",
+                json!({"agent_name":"Codex Bot","last_n":1}),
+            ))
+            .await;
+        let read_payload = decode_tool_payload(&read).unwrap();
+        assert_eq!(read_payload["showing"], 1);
+        assert_eq!(read_payload["entries"][0]["topic"], "phase8");
+    }
+
+    #[tokio::test]
+    async fn concurrent_tool_calls_leave_server_stable() {
+        let server = test_server().await;
+        let first = server.handle_request(tool_call(
+            10,
+            "mempalace_diary_write",
+            json!({"agent_name":"Worker One","entry":"SESSION:A","topic":"ops"}),
+        ));
+        let second = server.handle_request(tool_call(
+            11,
+            "mempalace_diary_write",
+            json!({"agent_name":"Worker Two","entry":"SESSION:B","topic":"ops"}),
+        ));
+        let (left, right) = tokio::join!(first, second);
+        assert_eq!(decode_tool_payload(&left).unwrap()["success"], true);
+        assert_eq!(decode_tool_payload(&right).unwrap()["success"], true);
+    }
+}
