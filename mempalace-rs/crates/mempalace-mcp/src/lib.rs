@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 use time::{Date, OffsetDateTime, format_description::well_known::Rfc3339};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 pub use mempalace_core as core;
@@ -344,6 +345,36 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
     ToolName::all().into_iter().map(ToolName::definition).collect()
 }
 
+pub async fn serve_transport<P, R, W>(
+    server: &McpServer<P>,
+    reader: R,
+    mut writer: W,
+) -> std::result::Result<(), Box<dyn std::error::Error>>
+where
+    P: EmbeddingProvider + Send,
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut lines = reader.lines();
+    while let Some(line) = lines.next_line().await? {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let response = server.handle_line(&line).await;
+        if response.is_null() {
+            continue;
+        }
+
+        let response = serde_json::to_string(&response)?;
+        writer.write_all(response.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+        writer.flush().await?;
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct McpServer<P> {
     runtime: Arc<Mutex<McpRuntime<P>>>,
@@ -389,6 +420,10 @@ where
     }
 
     pub async fn handle_request(&self, request: JsonRpcRequest) -> Value {
+        if request.id.is_none() {
+            return Value::Null;
+        }
+
         match request.method.as_str() {
             "initialize" => json!({
                 "jsonrpc":"2.0",
@@ -399,7 +434,6 @@ where
                     "serverInfo":{"name":SERVER_NAME,"version":SERVER_VERSION}
                 }
             }),
-            "notifications/initialized" => Value::Null,
             "tools/list" => json!({
                 "jsonrpc":"2.0",
                 "id":request.id,
@@ -1177,13 +1211,27 @@ fn infer_entity_kind(name: &str) -> EntityKind {
     if name.chars().any(|ch| ch.is_ascii_digit()) {
         return EntityKind::Concept;
     }
-    if !trimmed.contains(' ')
-        && !trimmed.contains('-')
-        && trimmed.chars().next().is_some_and(|ch| ch.is_ascii_uppercase())
+
+    let tokens = trimmed
+        .split(|ch: char| ch.is_whitespace() || ch == '-')
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.len() >= 2
+        && tokens.iter().all(|token| {
+            let mut chars = token.chars();
+            let Some(first) = chars.next() else {
+                return false;
+            };
+            first.is_ascii_uppercase() && chars.all(|ch| ch.is_ascii_lowercase() || ch == '\'')
+        })
     {
         return EntityKind::Person;
     }
-    EntityKind::Concept
+    if tokens.len() == 1 && trimmed.chars().all(|ch| ch.is_ascii_uppercase()) {
+        return EntityKind::Concept;
+    }
+
+    EntityKind::Unknown
 }
 
 fn diary_wing_name(agent_name: &str) -> String {
@@ -1252,20 +1300,31 @@ mod tests {
     use mempalace_embeddings::{
         EmbeddingProvider, EmbeddingResponse, StartupValidation, StartupValidationStatus,
     };
-    use tempfile::tempdir;
+    use tempfile::TempDir;
     use time::macros::{date, datetime};
+    use tokio::io::{AsyncReadExt, BufReader};
 
     #[derive(Debug, Clone)]
     struct StubProvider {
         profile: EmbeddingProfile,
-        seed: [f32; 4],
     }
 
     impl StubProvider {
-        fn vector(&self) -> Vec<f32> {
+        fn vector_for(&self, text: &str) -> Vec<f32> {
+            let lower = text.to_ascii_lowercase();
+            let seed = if ["auth", "migration", "parity"].iter().any(|token| lower.contains(token))
+            {
+                [1.0, 0.0, 0.0, 0.0]
+            } else if ["session", "diary", "ops"].iter().any(|token| lower.contains(token)) {
+                [0.0, 1.0, 0.0, 0.0]
+            } else if ["rust", "cli"].iter().any(|token| lower.contains(token)) {
+                [0.0, 0.0, 1.0, 0.0]
+            } else {
+                [0.0, 0.0, 0.0, 1.0]
+            };
             let mut values = Vec::with_capacity(self.profile.metadata().dimensions);
             while values.len() < self.profile.metadata().dimensions {
-                values.extend(self.seed);
+                values.extend(seed);
             }
             values.truncate(self.profile.metadata().dimensions);
             values
@@ -1291,7 +1350,7 @@ mod tests {
             request: &EmbeddingRequest,
         ) -> mempalace_embeddings::Result<EmbeddingResponse> {
             EmbeddingResponse::from_vectors(
-                (0..request.len()).map(|_| self.vector()).collect(),
+                request.inputs().iter().map(|text| self.vector_for(text)).collect(),
                 self.profile.metadata().dimensions,
                 self.profile,
                 self.profile.metadata().model_id,
@@ -1299,24 +1358,27 @@ mod tests {
         }
     }
 
-    async fn test_server() -> McpServer<StubProvider> {
-        let tempdir = tempdir().unwrap();
-        let palace_path = tempdir.keep().join("palace");
+    struct TestHarness {
+        _tempdir: TempDir,
+        server: McpServer<StubProvider>,
+    }
+
+    async fn test_harness() -> TestHarness {
+        let tempdir = TempDir::new().unwrap();
+        let palace_path = tempdir.path().join("palace");
         let config = MempalaceConfig {
             schema_version: 1,
             collection_name: "mempalace_drawers".to_owned(),
             palace_path,
             embedding_profile: EmbeddingProfile::Balanced,
         };
-        let server = McpServer::from_parts(
-            config,
-            StubProvider { profile: EmbeddingProfile::Balanced, seed: [1.0, 0.0, 0.0, 0.0] },
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::from_parts(config, StubProvider { profile: EmbeddingProfile::Balanced })
+                .await
+                .unwrap();
         seed_drawers(&server).await;
         seed_knowledge_graph(&server).await;
-        server
+        TestHarness { _tempdir: tempdir, server }
     }
 
     async fn seed_drawers(server: &McpServer<StubProvider>) {
@@ -1421,8 +1483,9 @@ mod tests {
     #[tokio::test]
     async fn initialize_matches_phase0_contract_shape() {
         let fixture = phase0_contract_fixture().unwrap();
-        let server = test_server().await;
-        let response = server
+        let harness = test_harness().await;
+        let response = harness
+            .server
             .handle_request(JsonRpcRequest {
                 jsonrpc: Some("2.0".to_owned()),
                 id: Some(json!(1)),
@@ -1434,9 +1497,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_tool_uses_phase0_shape_without_similarity() {
-        let server = test_server().await;
-        let response = server
+    async fn search_tool_returns_similarity_scores() {
+        let harness = test_harness().await;
+        let response = harness
+            .server
             .handle_request(tool_call(
                 4,
                 "mempalace_search",
@@ -1451,14 +1515,15 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .all(|result| result.get("similarity").is_none())
+                .all(|result| result.get("similarity").is_some())
         );
     }
 
     #[tokio::test]
     async fn status_tool_reports_protocol_and_counts() {
-        let server = test_server().await;
-        let response = server.handle_request(tool_call(3, "mempalace_status", json!({}))).await;
+        let harness = test_harness().await;
+        let response =
+            harness.server.handle_request(tool_call(3, "mempalace_status", json!({}))).await;
         let payload = decode_tool_payload(&response).unwrap();
         assert_eq!(payload["total_drawers"], 2);
         assert_eq!(payload["protocol"], PALACE_PROTOCOL);
@@ -1467,8 +1532,9 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_direction_returns_invalid_params() {
-        let server = test_server().await;
-        let response = server
+        let harness = test_harness().await;
+        let response = harness
+            .server
             .handle_request(tool_call(
                 7,
                 "mempalace_kg_query",
@@ -1481,15 +1547,17 @@ mod tests {
     #[tokio::test]
     async fn unknown_tool_uses_phase0_error_code() {
         let fixture = phase0_contract_fixture().unwrap();
-        let server = test_server().await;
-        let response = server.handle_request(tool_call(5, "mempalace_nope", json!({}))).await;
+        let harness = test_harness().await;
+        let response =
+            harness.server.handle_request(tool_call(5, "mempalace_nope", json!({}))).await;
         assert_eq!(response, fixture["error"]);
     }
 
     #[tokio::test]
     async fn diary_tools_round_trip_entries() {
-        let server = test_server().await;
-        let write = server
+        let harness = test_harness().await;
+        let write = harness
+            .server
             .handle_request(tool_call(
                 8,
                 "mempalace_diary_write",
@@ -1499,7 +1567,8 @@ mod tests {
         let write_payload = decode_tool_payload(&write).unwrap();
         assert_eq!(write_payload["success"], true);
 
-        let read = server
+        let read = harness
+            .server
             .handle_request(tool_call(
                 9,
                 "mempalace_diary_read",
@@ -1512,14 +1581,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_tool_calls_leave_server_stable() {
-        let server = test_server().await;
-        let first = server.handle_request(tool_call(
+    async fn concurrent_tool_writes_serialize_without_corruption() {
+        let harness = test_harness().await;
+        let first = harness.server.handle_request(tool_call(
             10,
             "mempalace_diary_write",
             json!({"agent_name":"Worker One","entry":"SESSION:A","topic":"ops"}),
         ));
-        let second = server.handle_request(tool_call(
+        let second = harness.server.handle_request(tool_call(
             11,
             "mempalace_diary_write",
             json!({"agent_name":"Worker Two","entry":"SESSION:B","topic":"ops"}),
@@ -1527,5 +1596,207 @@ mod tests {
         let (left, right) = tokio::join!(first, second);
         assert_eq!(decode_tool_payload(&left).unwrap()["success"], true);
         assert_eq!(decode_tool_payload(&right).unwrap()["success"], true);
+    }
+
+    #[tokio::test]
+    async fn taxonomy_listing_and_graph_tools_cover_seeded_data() {
+        let harness = test_harness().await;
+
+        let list_wings =
+            harness.server.handle_request(tool_call(12, "mempalace_list_wings", json!({}))).await;
+        let list_rooms = harness
+            .server
+            .handle_request(tool_call(13, "mempalace_list_rooms", json!({"wing":"wing_code"})))
+            .await;
+        let taxonomy =
+            harness.server.handle_request(tool_call(14, "mempalace_get_taxonomy", json!({}))).await;
+        let traverse = harness
+            .server
+            .handle_request(tool_call(
+                15,
+                "mempalace_traverse",
+                json!({"start_room":"auth-migration","max_hops":2}),
+            ))
+            .await;
+        let tunnels = harness
+            .server
+            .handle_request(tool_call(
+                16,
+                "mempalace_find_tunnels",
+                json!({"wing_a":"wing_code","wing_b":"wing_team"}),
+            ))
+            .await;
+        let graph_stats =
+            harness.server.handle_request(tool_call(17, "mempalace_graph_stats", json!({}))).await;
+
+        let wings_payload = decode_tool_payload(&list_wings).unwrap();
+        assert_eq!(wings_payload["wings"]["wing_code"], 1);
+        assert_eq!(wings_payload["wings"]["wing_team"], 1);
+
+        let rooms_payload = decode_tool_payload(&list_rooms).unwrap();
+        assert_eq!(rooms_payload["rooms"]["auth-migration"], 1);
+
+        let taxonomy_payload = decode_tool_payload(&taxonomy).unwrap();
+        assert_eq!(taxonomy_payload["taxonomy"]["wing_code"]["auth-migration"], 1);
+
+        let traverse_payload = decode_tool_payload(&traverse).unwrap();
+        assert!(!traverse_payload.as_array().unwrap().is_empty());
+
+        let tunnels_payload = decode_tool_payload(&tunnels).unwrap();
+        assert!(!tunnels_payload.as_array().unwrap().is_empty());
+
+        let graph_stats_payload = decode_tool_payload(&graph_stats).unwrap();
+        assert_eq!(graph_stats_payload["total_rooms"], 1);
+        assert_eq!(graph_stats_payload["tunnel_rooms"], 1);
+        assert!(graph_stats_payload["total_edges"].as_u64().unwrap() >= 1);
+    }
+
+    #[tokio::test]
+    async fn knowledge_graph_tools_cover_add_query_invalidate_timeline_and_stats() {
+        let harness = test_harness().await;
+
+        let add = harness
+            .server
+            .handle_request(tool_call(
+                18,
+                "mempalace_kg_add",
+                json!({
+                    "subject":"Alice Smith",
+                    "predicate":"works_on",
+                    "object":"MemPalace",
+                    "valid_from":"2026-04-12",
+                    "source_closet":"freeform source ref"
+                }),
+            ))
+            .await;
+        assert_eq!(decode_tool_payload(&add).unwrap()["success"], true);
+
+        let query = harness
+            .server
+            .handle_request(tool_call(
+                19,
+                "mempalace_kg_query",
+                json!({"entity":"Alice Smith","direction":"outgoing"}),
+            ))
+            .await;
+        let query_payload = decode_tool_payload(&query).unwrap();
+        assert_eq!(query_payload["count"], 1);
+        assert_eq!(query_payload["facts"][0]["predicate"], "works_on");
+        assert_eq!(query_payload["facts"][0]["object"], "MemPalace");
+
+        let timeline = harness
+            .server
+            .handle_request(tool_call(20, "mempalace_kg_timeline", json!({"entity":"Alice Smith"})))
+            .await;
+        let timeline_payload = decode_tool_payload(&timeline).unwrap();
+        assert_eq!(timeline_payload["count"], 1);
+        assert_eq!(timeline_payload["timeline"][0]["subject"], "Alice Smith");
+
+        let invalidate = harness
+            .server
+            .handle_request(tool_call(
+                21,
+                "mempalace_kg_invalidate",
+                json!({
+                    "subject":"Alice Smith",
+                    "predicate":"works_on",
+                    "object":"MemPalace",
+                    "ended":"2026-04-13"
+                }),
+            ))
+            .await;
+        assert_eq!(decode_tool_payload(&invalidate).unwrap()["success"], true);
+
+        let stats =
+            harness.server.handle_request(tool_call(22, "mempalace_kg_stats", json!({}))).await;
+        let stats_payload = decode_tool_payload(&stats).unwrap();
+        assert!(stats_payload["entities"].as_u64().unwrap() >= 4);
+        assert!(stats_payload["triples"].as_u64().unwrap() >= 2);
+        assert!(stats_payload["expired_facts"].as_u64().unwrap() >= 1);
+    }
+
+    #[tokio::test]
+    async fn add_delete_and_duplicate_tools_cover_write_path() {
+        let harness = test_harness().await;
+        let content = "Roadmap budget planning note from MCP";
+
+        let add = harness
+            .server
+            .handle_request(tool_call(
+                23,
+                "mempalace_add_drawer",
+                json!({
+                    "wing":"wing_myproject",
+                    "room":"backend",
+                    "content":content,
+                    "source_file":"notes.md",
+                    "added_by":"tester"
+                }),
+            ))
+            .await;
+        let add_payload = decode_tool_payload(&add).unwrap();
+        assert_eq!(add_payload["success"], true);
+
+        let duplicate = harness
+            .server
+            .handle_request(tool_call(
+                24,
+                "mempalace_check_duplicate",
+                json!({"content":content,"threshold":0.9}),
+            ))
+            .await;
+        let duplicate_payload = decode_tool_payload(&duplicate).unwrap();
+        assert_eq!(duplicate_payload["is_duplicate"], true);
+        assert!(!duplicate_payload["matches"].as_array().unwrap().is_empty());
+
+        let delete = harness
+            .server
+            .handle_request(tool_call(
+                25,
+                "mempalace_delete_drawer",
+                json!({"drawer_id":add_payload["drawer_id"]}),
+            ))
+            .await;
+        assert_eq!(decode_tool_payload(&delete).unwrap()["success"], true);
+    }
+
+    #[tokio::test]
+    async fn serve_transport_processes_tool_calls_and_ignores_notifications() {
+        let harness = test_harness().await;
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"mempalace_status\",\"arguments\":{}}}\n"
+        );
+        let (client, server_stream) = tokio::io::duplex(8_192);
+        let (reader_half, writer_half) = tokio::io::split(server_stream);
+        let task = tokio::spawn(async move {
+            serve_transport(&harness.server, BufReader::new(reader_half), writer_half)
+                .await
+                .unwrap();
+        });
+
+        let (mut client_reader, mut client_writer) = tokio::io::split(client);
+        client_writer.write_all(input.as_bytes()).await.unwrap();
+        client_writer.shutdown().await.unwrap();
+
+        let mut output = String::new();
+        client_reader.read_to_string(&mut output).await.unwrap();
+        task.await.unwrap();
+
+        let lines = output.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        let initialize: Value = serde_json::from_str(lines[0]).unwrap();
+        let status: Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(initialize["result"]["protocolVersion"], PROTOCOL_VERSION);
+        assert_eq!(decode_tool_payload(&status).unwrap()["total_drawers"], 2);
+    }
+
+    #[test]
+    fn entity_kind_heuristic_prefers_unknown_over_false_people() {
+        assert_eq!(infer_entity_kind("Alice Smith"), EntityKind::Person);
+        assert_eq!(infer_entity_kind("CUDA"), EntityKind::Concept);
+        assert_eq!(infer_entity_kind("MemPalace"), EntityKind::Unknown);
+        assert_eq!(infer_entity_kind("Mary-Anne"), EntityKind::Person);
     }
 }

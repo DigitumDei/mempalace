@@ -1,44 +1,106 @@
-use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-fn unique_base_dir() -> PathBuf {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("mempalace-mcp-stdio-{nanos}"))
+use mempalace_config::MempalaceConfig;
+use mempalace_core::EmbeddingProfile;
+use mempalace_embeddings::{
+    EmbeddingProvider, EmbeddingRequest, EmbeddingResponse, StartupValidation,
+    StartupValidationStatus,
+};
+use mempalace_mcp::{McpServer, serve_transport};
+use tempfile::TempDir;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+
+#[derive(Debug, Clone)]
+struct StubProvider {
+    profile: EmbeddingProfile,
 }
 
-#[test]
-fn server_handles_initialize_and_tools_list_over_stdio() {
-    let base_dir = unique_base_dir();
-    std::fs::create_dir_all(&base_dir).unwrap();
+impl StubProvider {
+    fn vector_for(&self, text: &str) -> Vec<f32> {
+        let lower = text.to_ascii_lowercase();
+        let seed = if ["auth", "migration", "parity"].iter().any(|token| lower.contains(token)) {
+            [1.0, 0.0, 0.0, 0.0]
+        } else if ["session", "diary", "ops"].iter().any(|token| lower.contains(token)) {
+            [0.0, 1.0, 0.0, 0.0]
+        } else if ["rust", "cli"].iter().any(|token| lower.contains(token)) {
+            [0.0, 0.0, 1.0, 0.0]
+        } else {
+            [0.0, 0.0, 0.0, 1.0]
+        };
+        let mut values = Vec::with_capacity(self.profile.metadata().dimensions);
+        while values.len() < self.profile.metadata().dimensions {
+            values.extend(seed);
+        }
+        values.truncate(self.profile.metadata().dimensions);
+        values
+    }
+}
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mempalace-mcp"))
-        .env("HOME", &base_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
+impl EmbeddingProvider for StubProvider {
+    fn profile(&self) -> &'static mempalace_core::EmbeddingProfileMetadata {
+        self.profile.metadata()
+    }
 
-    let mut stdin = child.stdin.take().unwrap();
-    writeln!(
-        stdin,
-        "{}",
-        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})
-    )
-    .unwrap();
-    writeln!(
-        stdin,
-        "{}",
-        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
-    )
-    .unwrap();
-    drop(stdin);
+    fn startup_validation(&self) -> mempalace_embeddings::Result<StartupValidation> {
+        Ok(StartupValidation {
+            status: StartupValidationStatus::Ready,
+            cache_root: PathBuf::from("/tmp/stub"),
+            model_id: self.profile.metadata().model_id,
+            detail: "stub".to_owned(),
+        })
+    }
 
-    let stdout = child.stdout.take().unwrap();
-    let lines = BufReader::new(stdout).lines().collect::<Result<Vec<_>, _>>().unwrap();
-    let initialize: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
-    let tools: serde_json::Value = serde_json::from_str(&lines[1]).unwrap();
+    fn embed(
+        &mut self,
+        request: &EmbeddingRequest,
+    ) -> mempalace_embeddings::Result<EmbeddingResponse> {
+        EmbeddingResponse::from_vectors(
+            request.inputs().iter().map(|text| self.vector_for(text)).collect(),
+            self.profile.metadata().dimensions,
+            self.profile,
+            self.profile.metadata().model_id,
+        )
+    }
+}
+
+async fn test_server(tempdir: &TempDir) -> McpServer<StubProvider> {
+    let config = MempalaceConfig {
+        schema_version: 1,
+        collection_name: "mempalace_drawers".to_owned(),
+        palace_path: tempdir.path().join("palace"),
+        embedding_profile: EmbeddingProfile::Balanced,
+    };
+    McpServer::from_parts(config, StubProvider { profile: EmbeddingProfile::Balanced })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn server_handles_initialize_and_tools_list_over_transport() {
+    let tempdir = TempDir::new().unwrap();
+    let server = test_server(&tempdir).await;
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n"
+    );
+
+    let (client, server_stream) = tokio::io::duplex(8_192);
+    let (reader_half, writer_half) = tokio::io::split(server_stream);
+    let task = tokio::spawn(async move {
+        serve_transport(&server, BufReader::new(reader_half), writer_half).await.unwrap();
+    });
+
+    let (mut client_reader, mut client_writer) = tokio::io::split(client);
+    client_writer.write_all(input.as_bytes()).await.unwrap();
+    client_writer.shutdown().await.unwrap();
+
+    let mut output = String::new();
+    client_reader.read_to_string(&mut output).await.unwrap();
+    task.await.unwrap();
+
+    let lines = output.lines().collect::<Vec<_>>();
+    let initialize: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    let tools: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
 
     assert_eq!(initialize["result"]["protocolVersion"], "2024-11-05");
     assert!(
@@ -48,28 +110,26 @@ fn server_handles_initialize_and_tools_list_over_stdio() {
             .iter()
             .any(|tool| tool["name"] == "mempalace_status")
     );
-    assert!(child.wait().unwrap().success());
 }
 
-#[test]
-fn server_returns_parse_error_for_invalid_json() {
-    let base_dir = unique_base_dir();
-    std::fs::create_dir_all(&base_dir).unwrap();
+#[tokio::test]
+async fn server_returns_parse_error_for_invalid_json() {
+    let tempdir = TempDir::new().unwrap();
+    let server = test_server(&tempdir).await;
+    let (client, server_stream) = tokio::io::duplex(4_096);
+    let (reader_half, writer_half) = tokio::io::split(server_stream);
+    let task = tokio::spawn(async move {
+        serve_transport(&server, BufReader::new(reader_half), writer_half).await.unwrap();
+    });
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mempalace-mcp"))
-        .env("HOME", &base_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let (mut client_reader, mut client_writer) = tokio::io::split(client);
+    client_writer.write_all(b"{\n").await.unwrap();
+    client_writer.shutdown().await.unwrap();
 
-    let mut stdin = child.stdin.take().unwrap();
-    writeln!(stdin, "{{").unwrap();
-    drop(stdin);
+    let mut output = String::new();
+    client_reader.read_to_string(&mut output).await.unwrap();
+    task.await.unwrap();
 
-    let stdout = child.stdout.take().unwrap();
-    let line = BufReader::new(stdout).lines().next().unwrap().unwrap();
-    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+    let response: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
     assert_eq!(response["error"]["code"], -32700);
-    assert!(child.wait().unwrap().success());
 }
