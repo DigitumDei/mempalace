@@ -133,3 +133,52 @@ async fn server_returns_parse_error_for_invalid_json() {
     let response: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
     assert_eq!(response["error"]["code"], -32700);
 }
+
+#[tokio::test]
+async fn server_handles_embedding_backed_tool_calls_over_transport() {
+    let tempdir = TempDir::new().unwrap();
+    let server = test_server(&tempdir).await;
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"mempalace_add_drawer\",\"arguments\":{\"wing\":\"wing_code\",\"room\":\"backend\",\"content\":\"Rust MCP transport coverage note\",\"source_file\":\"transport.md\",\"added_by\":\"stdio-test\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"mempalace_check_duplicate\",\"arguments\":{\"content\":\"Rust MCP transport coverage note\",\"threshold\":0.9}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"mempalace_diary_write\",\"arguments\":{\"agent_name\":\"Transport Bot\",\"entry\":\"SESSION:2026-04-17|transport.coverage\",\"topic\":\"transport\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"mempalace_diary_read\",\"arguments\":{\"agent_name\":\"Transport Bot\",\"last_n\":1}}}\n"
+    );
+
+    let (client, server_stream) = tokio::io::duplex(16_384);
+    let (reader_half, writer_half) = tokio::io::split(server_stream);
+    let task = tokio::spawn(async move {
+        serve_transport(&server, BufReader::new(reader_half), writer_half).await.unwrap();
+    });
+
+    let (mut client_reader, mut client_writer) = tokio::io::split(client);
+    client_writer.write_all(input.as_bytes()).await.unwrap();
+    client_writer.shutdown().await.unwrap();
+
+    let mut output = String::new();
+    client_reader.read_to_string(&mut output).await.unwrap();
+    task.await.unwrap();
+
+    let lines = output.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 4);
+
+    let add: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    let duplicate: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    let diary_write: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+    let diary_read: serde_json::Value = serde_json::from_str(lines[3]).unwrap();
+
+    let add_payload = mempalace_mcp::decode_tool_payload(&add).unwrap();
+    assert_eq!(add_payload["success"], true);
+
+    let duplicate_payload = mempalace_mcp::decode_tool_payload(&duplicate).unwrap();
+    assert_eq!(duplicate_payload["is_duplicate"], true);
+    assert!(!duplicate_payload["matches"].as_array().unwrap().is_empty());
+
+    let diary_write_payload = mempalace_mcp::decode_tool_payload(&diary_write).unwrap();
+    assert_eq!(diary_write_payload["success"], true);
+
+    let diary_read_payload = mempalace_mcp::decode_tool_payload(&diary_read).unwrap();
+    assert_eq!(diary_read_payload["agent"], "Transport Bot");
+    assert_eq!(diary_read_payload["showing"], 1);
+    assert_eq!(diary_read_payload["entries"][0]["topic"], "transport");
+}
