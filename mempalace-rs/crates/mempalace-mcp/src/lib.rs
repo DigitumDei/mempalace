@@ -1987,4 +1987,72 @@ mod tests {
         assert_eq!(payload["entries"].as_array().unwrap().len(), 1);
         assert_eq!(payload["entries"][0]["content"], "SESSION:primary");
     }
+
+    #[tokio::test]
+    async fn diary_read_falls_back_when_primary_wing_has_no_diary_entries() {
+        let harness = test_harness().await;
+        let non_diary_drawer = DrawerRecord {
+            id: DrawerId::new("worker_one/non-diary/0001").unwrap(),
+            wing: WingId::new(&diary_wing_name("Worker-One")).unwrap(),
+            room: RoomId::new("ops-log").unwrap(),
+            hall: Some("hall_events".to_owned()),
+            date: Some(date!(2026 - 04 - 17)),
+            source_file: "ops.md".to_owned(),
+            chunk_index: 0,
+            ingest_mode: "fixtures".to_owned(),
+            extract_mode: None,
+            added_by: "tests".to_owned(),
+            filed_at: datetime!(2026-04-17 11:00:00 UTC),
+            importance: None,
+            emotional_weight: None,
+            weight: None,
+            content: "Primary wing has non-diary content only.".to_owned(),
+            content_hash: hash_text("Primary wing has non-diary content only."),
+            embedding: vec![0.0; EmbeddingProfile::Balanced.metadata().dimensions],
+        };
+        let legacy_diary_drawer = DrawerRecord {
+            id: DrawerId::new("diary_legacy_worker_one_0002").unwrap(),
+            wing: WingId::new(&legacy_diary_wing_name("Worker-One")).unwrap(),
+            room: RoomId::new(DIARY_ROOM).unwrap(),
+            hall: Some(DIARY_HALL.to_owned()),
+            date: Some(date!(2026 - 04 - 17)),
+            source_file: format!("{DIARY_TOPIC_PREFIX}legacy"),
+            chunk_index: 0,
+            ingest_mode: "diary".to_owned(),
+            extract_mode: None,
+            added_by: "legacy".to_owned(),
+            filed_at: datetime!(2026-04-17 12:00:00 UTC),
+            importance: None,
+            emotional_weight: None,
+            weight: None,
+            content: "SESSION:legacy-only".to_owned(),
+            content_hash: hash_text("SESSION:legacy-only"),
+            embedding: vec![0.0; EmbeddingProfile::Balanced.metadata().dimensions],
+        };
+
+        let runtime = harness.server.runtime.lock().await;
+        runtime
+            .storage
+            .drawer_store()
+            .put_drawers(&[non_diary_drawer, legacy_diary_drawer], DuplicateStrategy::Error)
+            .await
+            .unwrap();
+        drop(runtime);
+
+        let payload = decode_tool_payload(
+            &harness
+                .server
+                .handle_request(tool_call(
+                    98,
+                    "mempalace_diary_read",
+                    json!({"agent_name":"Worker-One","last_n":10}),
+                ))
+                .await,
+        )
+        .unwrap();
+
+        assert_eq!(payload["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["entries"][0]["content"], "SESSION:legacy-only");
+        assert_eq!(payload["entries"][0]["topic"], "legacy");
+    }
 }
