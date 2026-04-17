@@ -1,17 +1,17 @@
 #![allow(missing_docs)]
 
-use std::io::{self, BufRead, Write};
+use std::io::Write;
 
 use mempalace_mcp::McpServer;
+use tokio::io::{self, AsyncBufReadExt};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = McpServer::from_default_config(None).await?;
-    let stdin = io::stdin();
+    let mut lines = io::BufReader::new(io::stdin()).lines();
     let mut stdout = io::stdout();
 
-    for line in stdin.lock().lines() {
-        let line = line?;
+    while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
         }

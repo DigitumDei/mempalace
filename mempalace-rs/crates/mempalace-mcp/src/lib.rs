@@ -53,6 +53,8 @@ pub enum McpError {
     Graph(#[from] mempalace_graph::GraphError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error("time formatting error: {0}")]
+    TimeFormat(String),
     #[error("io error at {path}: {source}")]
     Io {
         path: PathBuf,
@@ -357,7 +359,8 @@ impl McpServer<FastembedProvider> {
         let provider = FastembedProvider::new(
             config.embedding_profile,
             FastembedProviderConfig::new(cache_root),
-        );
+        )
+        .try_initialize()?;
         Self::from_parts(config, provider).await
     }
 }
@@ -582,6 +585,7 @@ where
             "results": results.into_iter().map(|result| json!({
                 "wing": result.wing,
                 "room": result.room,
+                "similarity": round_similarity(result.score),
                 "text": result.content,
                 "source_file": result.source_file,
             })).collect::<Vec<_>>()
@@ -711,7 +715,7 @@ where
             "entry_id": drawer_id,
             "agent": agent_name,
             "topic": topic,
-            "timestamp": now.format(&Rfc3339).map_tool_invalid("invalid diary timestamp")?,
+            "timestamp": format_rfc3339(now)?,
         }))
     }
 
@@ -754,8 +758,7 @@ where
                     .date
                     .map(format_date)
                     .unwrap_or_else(|| drawer.filed_at.date().to_string());
-                let timestamp =
-                    drawer.filed_at.format(&Rfc3339).map_tool_invalid("invalid timestamp")?;
+                let timestamp = format_rfc3339(drawer.filed_at)?;
                 Ok::<Value, ToolError>(json!({
                     "date": date,
                     "timestamp": timestamp,
@@ -806,11 +809,12 @@ where
             parse_direction(optional_string(arguments, "direction")?.as_deref().unwrap_or("both"))?;
         let runtime = KnowledgeGraphRuntime::new(self.storage.operational_store());
         let facts = runtime.query_entity(&entity, as_of, direction).map_tool_internal()?;
+        let count = facts.len();
         Ok(json!({
             "entity": entity,
             "as_of": optional_string(arguments, "as_of")?,
             "facts": facts,
-            "count": facts.len(),
+            "count": count,
         }))
     }
 
@@ -821,7 +825,8 @@ where
         let valid_from_text = optional_string(arguments, "valid_from")?;
         let valid_from = valid_from_text.as_deref().map(parse_date).transpose()?;
         let source_closet = optional_string(arguments, "source_closet")?;
-        let source_drawer_id = source_closet.as_deref().map(parse_drawer_id).transpose()?;
+        let source_drawer_id =
+            source_closet.as_deref().and_then(|value| parse_drawer_id(value).ok());
         let runtime = KnowledgeGraphRuntime::new(self.storage.operational_store());
         let triple_id = runtime
             .add_fact(
@@ -835,7 +840,7 @@ where
                     valid_to: None,
                     confidence: 1.0,
                     source_drawer_id,
-                    source_file: None,
+                    source_file: source_closet,
                 },
                 OffsetDateTime::now_utc(),
             )
@@ -872,10 +877,11 @@ where
         let entity = optional_string(arguments, "entity")?;
         let runtime = KnowledgeGraphRuntime::new(self.storage.operational_store());
         let timeline = runtime.timeline(entity.as_deref()).map_tool_internal()?;
+        let count = timeline.len();
         Ok(json!({
             "entity": entity.clone().unwrap_or_else(|| "all".to_owned()),
             "timeline": timeline,
-            "count": timeline.len(),
+            "count": count,
         }))
     }
 
@@ -1061,6 +1067,12 @@ fn jsonrpc_error(id: Option<Value>, code: ErrorCode, message: String) -> Value {
         "id":id,
         "error":{"code":code as i32,"message":message}
     })
+}
+
+fn format_rfc3339(timestamp: OffsetDateTime) -> ToolResult<String> {
+    timestamp
+        .format(&Rfc3339)
+        .map_err(|error| ToolError::Internal(McpError::TimeFormat(error.to_string())))
 }
 
 fn required_string(arguments: &Value, field: &'static str) -> ToolResult<String> {

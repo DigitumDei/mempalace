@@ -695,7 +695,7 @@ fn source_stem(source_file: &str) -> String {
 mod tests {
     use super::{
         CompressionStats, Dialect, ParseError, ReverseParsingSupport, SourceMetadata,
-        WakeUpAaaKConfig, count_tokens,
+        WakeUpAaaKConfig, char_count, count_tokens,
     };
     use mempalace_core::{DrawerId, DrawerRecord, RoomId, WingId};
     use serde_json::Value;
