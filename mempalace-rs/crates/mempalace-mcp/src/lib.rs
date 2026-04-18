@@ -1142,7 +1142,6 @@ type ToolResult<T> = std::result::Result<T, ToolError>;
 trait ToolResultExt<T> {
     fn map_tool(self) -> ToolResult<T>;
     fn map_tool_internal(self) -> ToolResult<T>;
-    fn map_tool_invalid(self, message: &'static str) -> ToolResult<T>;
 }
 
 impl<T, E> ToolResultExt<T> for std::result::Result<T, E>
@@ -1155,10 +1154,6 @@ where
 
     fn map_tool_internal(self) -> ToolResult<T> {
         self.map_tool()
-    }
-
-    fn map_tool_invalid(self, message: &'static str) -> ToolResult<T> {
-        self.map_err(|_| ToolError::InvalidParams(message.to_owned()))
     }
 }
 
@@ -1401,14 +1396,11 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    use mempalace_embeddings::{
-        EmbeddingProvider, EmbeddingResponse, StartupValidation, StartupValidationStatus,
-    };
     use tempfile::TempDir;
     use time::macros::{date, datetime};
     use tokio::io::{AsyncReadExt, BufReader};
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     struct TestHarness {
         _tempdir: TempDir,
         server: McpServer<DeterministicStubProvider>,
@@ -1435,7 +1427,7 @@ mod tests {
     }
 
     async fn seed_drawers(server: &McpServer<DeterministicStubProvider>) {
-        let mut runtime = server.runtime.lock().await;
+        let runtime = server.runtime.lock().await;
         let now = datetime!(2026-04-11 09:00:00 UTC);
         let drawers = vec![
             DrawerRecord {
