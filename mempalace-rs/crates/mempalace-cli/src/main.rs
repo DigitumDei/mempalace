@@ -1,46 +1,148 @@
 #![allow(missing_docs)]
 
+use std::collections::BTreeMap;
 use std::env;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-use mempalace_config::ConfigLoader;
-use mempalace_core::EmbeddingProfile;
-use mempalace_embeddings::{
-    EmbeddingProvider, FastembedProvider, FastembedProviderConfig, StartupValidationStatus,
-    log_startup_validation,
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use mempalace_config::{
+    ConfigFileV1, ConfigLoader, MempalaceConfig, ProjectRoomConfig, ResolvedPaths,
 };
+use mempalace_core::{EmbeddingProfile, RoomId, SearchQuery, WingId};
+use mempalace_embeddings::{
+    EmbeddingProvider, FastembedProvider, FastembedProviderConfig, log_startup_validation,
+};
+use mempalace_ingest::{
+    ConversationExtractMode, ConversationIngestRequest, IngestSummary, ProjectIngestRequest,
+    ingest_conversations, ingest_project,
+};
+use mempalace_search::{SearchRuntime, WakeUpRequest};
+use mempalace_storage::{DrawerFilter, DrawerStore, StorageEngine, StorageLayout};
+use serde_yaml::Mapping;
+use tokio::runtime::Runtime;
 use tracing_subscriber::{EnvFilter, fmt};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_tracing("info");
-    match parse_args(env::args().skip(1))? {
-        Command::Help => {
-            print!("{}", usage());
-        }
-        Command::Version => {
-            println!("mempalace-cli {}", env!("CARGO_PKG_VERSION"));
-        }
-        Command::Init => {
-            let paths = ConfigLoader::init_default(None)?;
-            let config = ConfigLoader::load_with_env(None)?;
-            let cache_root = default_embedding_cache_dir();
-            let provider = FastembedProvider::new(
-                config.embedding_profile,
-                FastembedProviderConfig::new(cache_root),
-            );
-            let validation = provider.startup_validation()?;
-            log_startup_validation(&validation);
+const DEFERRED_COMMAND_DOC: &str = "docs/rust-phase-plans/Phase09-Deferred-Commands.md";
 
-            log_init_outcome(
-                &paths.config_file,
-                &config.palace_path,
-                config.embedding_profile,
-                validation.status,
-            );
+const INIT_HEADER_WIDTH: usize = 55;
+const STATUS_HEADER_WIDTH: usize = 55;
+const SEARCH_HEADER_WIDTH: usize = 60;
+const WAKE_UP_SEPARATOR_WIDTH: usize = 50;
+
+const SKIP_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    "dist",
+    "build",
+    ".next",
+    "coverage",
+    ".mempalace",
+];
+
+const PROJECT_FILE_EXTENSIONS: &[&str] = &[
+    "txt", "md", "py", "js", "ts", "jsx", "tsx", "json", "yaml", "yml", "html", "css", "java",
+    "go", "rs", "rb", "sh", "csv", "sql", "toml",
+];
+
+const FOLDER_ROOM_MAP: &[(&str, &str)] = &[
+    ("frontend", "frontend"),
+    ("front_end", "frontend"),
+    ("client", "frontend"),
+    ("ui", "frontend"),
+    ("views", "frontend"),
+    ("components", "frontend"),
+    ("pages", "frontend"),
+    ("backend", "backend"),
+    ("back_end", "backend"),
+    ("server", "backend"),
+    ("api", "backend"),
+    ("routes", "backend"),
+    ("services", "backend"),
+    ("controllers", "backend"),
+    ("models", "backend"),
+    ("database", "backend"),
+    ("db", "backend"),
+    ("docs", "documentation"),
+    ("doc", "documentation"),
+    ("documentation", "documentation"),
+    ("wiki", "documentation"),
+    ("readme", "documentation"),
+    ("notes", "documentation"),
+    ("design", "design"),
+    ("designs", "design"),
+    ("mockups", "design"),
+    ("wireframes", "design"),
+    ("assets", "design"),
+    ("storyboard", "design"),
+    ("costs", "costs"),
+    ("cost", "costs"),
+    ("budget", "costs"),
+    ("finance", "costs"),
+    ("financial", "costs"),
+    ("pricing", "costs"),
+    ("invoices", "costs"),
+    ("accounting", "costs"),
+    ("meetings", "meetings"),
+    ("meeting", "meetings"),
+    ("calls", "meetings"),
+    ("meeting_notes", "meetings"),
+    ("standup", "meetings"),
+    ("minutes", "meetings"),
+    ("team", "team"),
+    ("staff", "team"),
+    ("hr", "team"),
+    ("hiring", "team"),
+    ("employees", "team"),
+    ("people", "team"),
+    ("research", "research"),
+    ("references", "research"),
+    ("reading", "research"),
+    ("papers", "research"),
+    ("planning", "planning"),
+    ("roadmap", "planning"),
+    ("strategy", "planning"),
+    ("specs", "planning"),
+    ("requirements", "planning"),
+    ("tests", "testing"),
+    ("test", "testing"),
+    ("testing", "testing"),
+    ("qa", "testing"),
+    ("scripts", "scripts"),
+    ("tools", "scripts"),
+    ("utils", "scripts"),
+    ("config", "configuration"),
+    ("configs", "configuration"),
+    ("settings", "configuration"),
+    ("infrastructure", "configuration"),
+    ("infra", "configuration"),
+    ("deploy", "configuration"),
+];
+
+fn main() {
+    init_tracing("info");
+
+    let result = run_cli(env::args_os().skip(1), &CliContext::production(), fastembed_provider);
+
+    match result {
+        Ok(output) => {
+            if !output.stdout.is_empty() {
+                print!("{}", output.stdout);
+            }
+            if !output.stderr.is_empty() {
+                eprint!("{}", output.stderr);
+            }
+            std::process::exit(output.exit_code);
+        }
+        Err(error) => {
+            eprint!("{error}");
+            std::process::exit(2);
         }
     }
-
-    Ok(())
 }
 
 fn init_tracing(default_filter: &str) {
@@ -50,38 +152,746 @@ fn init_tracing(default_filter: &str) {
     let _ = fmt().with_env_filter(filter).with_target(false).try_init();
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Command {
-    Help,
-    Version,
-    Init,
+#[derive(Debug, Parser)]
+#[command(
+    name = "mempalace-cli",
+    about = "MemPalace — Give your AI a memory. No API key required.",
+    version
+)]
+struct Cli {
+    #[arg(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Where the palace lives (default: from ~/.mempalace/config.json or ~/.mempalace/palace)"
+    )]
+    palace: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
 }
 
-fn parse_args<I>(args: I) -> Result<Command, String>
-where
-    I: IntoIterator<Item = String>,
-{
-    let args = args.into_iter().collect::<Vec<_>>();
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Detect rooms from your folder structure.
+    Init {
+        dir: PathBuf,
+        #[arg(long, help = "Auto-accept detected rooms")]
+        yes: bool,
+    },
+    /// Mine files into the palace.
+    Mine {
+        dir: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliMode::Projects)]
+        mode: CliMode,
+        #[arg(long)]
+        wing: Option<String>,
+        #[arg(long, default_value = "mempalace-cli")]
+        agent: String,
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long, value_enum, default_value_t = CliExtractMode::Exchange)]
+        extract: CliExtractMode,
+    },
+    /// Find anything, exact words.
+    Search {
+        query: String,
+        #[arg(long)]
+        wing: Option<String>,
+        #[arg(long)]
+        room: Option<String>,
+        #[arg(long = "results", default_value_t = 5)]
+        results: usize,
+    },
+    /// Show what's been filed.
+    Status,
+    /// Show L0 + L1 wake-up context.
+    #[command(name = "wake-up")]
+    WakeUp {
+        #[arg(long)]
+        wing: Option<String>,
+    },
+    /// Deferred in Rust Phase 9. See the linked decision record.
+    Split {
+        dir: PathBuf,
+        #[arg(long = "output-dir")]
+        output_dir: Option<PathBuf>,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long = "min-sessions", default_value_t = 2)]
+        min_sessions: usize,
+    },
+    /// Deferred in Rust Phase 9. See the linked decision record.
+    Compress {
+        #[arg(long)]
+        wing: Option<String>,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+}
 
-    match args.as_slice() {
-        [] => Ok(Command::Init),
-        [arg] if arg == "init" => Ok(Command::Init),
-        [arg] if arg == "--help" || arg == "-h" || arg == "help" => Ok(Command::Help),
-        [arg] if arg == "--version" || arg == "-V" || arg == "version" => Ok(Command::Version),
-        _ => Err(format!("unrecognized arguments: {}\n\n{}", args.join(" "), usage())),
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+enum CliMode {
+    Projects,
+    Convos,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+enum CliExtractMode {
+    Exchange,
+    General,
+}
+
+#[derive(Debug, Clone)]
+struct CliContext {
+    config_base_dir: Option<PathBuf>,
+}
+
+impl CliContext {
+    fn production() -> Self {
+        Self { config_base_dir: None }
+    }
+
+    #[cfg(test)]
+    fn for_tests(config_base_dir: PathBuf) -> Self {
+        Self { config_base_dir: Some(config_base_dir) }
     }
 }
 
-fn usage() -> &'static str {
-    concat!(
-        "mempalace-cli ",
-        env!("CARGO_PKG_VERSION"),
-        "\n\n",
-        "Usage:\n",
-        "  mempalace-cli [init]\n",
-        "  mempalace-cli [--help | -h]\n",
-        "  mempalace-cli [--version | -V]\n"
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CliOutput {
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+impl CliOutput {
+    fn success(stdout: impl Into<String>) -> Self {
+        Self { exit_code: 0, stdout: stdout.into(), stderr: String::new() }
+    }
+
+    fn failure(exit_code: i32, stderr: impl Into<String>) -> Self {
+        Self { exit_code, stdout: String::new(), stderr: stderr.into() }
+    }
+}
+
+fn run_cli<I, T, F, P>(
+    args: I,
+    context: &CliContext,
+    provider_factory: F,
+) -> Result<CliOutput, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+    F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>>,
+    P: EmbeddingProvider,
+{
+    let argv = std::iter::once(std::ffi::OsString::from("mempalace-cli"))
+        .chain(args.into_iter().map(Into::into))
+        .collect::<Vec<_>>();
+    let cli = match Cli::try_parse_from(argv) {
+        Ok(cli) => cli,
+        Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp => {
+            return Ok(CliOutput::success(error.to_string()));
+        }
+        Err(error) if error.kind() == clap::error::ErrorKind::DisplayVersion => {
+            return Ok(CliOutput::success(error.to_string()));
+        }
+        Err(error) => return Err(error),
+    };
+
+    if cli.command.is_none() {
+        return Ok(CliOutput::success(render_help()));
+    }
+
+    execute(cli, context, provider_factory)
+}
+
+fn render_help() -> String {
+    let mut command = Cli::command();
+    let mut buffer = Vec::new();
+    if command.write_long_help(&mut buffer).is_err() {
+        return "mempalace-cli\n".to_owned();
+    }
+    String::from_utf8_lossy(&buffer).into_owned()
+}
+
+fn execute<F, P>(
+    cli: Cli,
+    context: &CliContext,
+    provider_factory: F,
+) -> Result<CliOutput, clap::Error>
+where
+    F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>>,
+    P: EmbeddingProvider,
+{
+    let Some(command) = cli.command else {
+        return Ok(CliOutput::success(render_help()));
+    };
+    match command {
+        Commands::Init { dir, yes } => {
+            execute_init(&dir, yes, cli.palace.as_deref(), context, provider_factory)
+        }
+        Commands::Mine { dir, mode, wing, agent, limit, dry_run, extract } => execute_mine(
+            &dir,
+            mode,
+            wing,
+            agent,
+            limit,
+            dry_run,
+            extract,
+            cli.palace.as_deref(),
+            context,
+            provider_factory,
+        ),
+        Commands::Search { query, wing, room, results } => execute_search(
+            &query,
+            wing,
+            room,
+            results,
+            cli.palace.as_deref(),
+            context,
+            provider_factory,
+        ),
+        Commands::Status => execute_status(cli.palace.as_deref(), context),
+        Commands::WakeUp { wing } => {
+            execute_wake_up(wing, cli.palace.as_deref(), context, provider_factory)
+        }
+        Commands::Split { .. } => Ok(deferred_command("split")),
+        Commands::Compress { .. } => Ok(deferred_command("compress")),
+    }
+}
+
+fn execute_init<F, P>(
+    dir: &Path,
+    _yes: bool,
+    palace_override: Option<&Path>,
+    context: &CliContext,
+    provider_factory: F,
+) -> Result<CliOutput, clap::Error>
+where
+    F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>>,
+    P: EmbeddingProvider,
+{
+    let project_dir = dir.canonicalize().map_err(|source| {
+        clap::Error::raw(
+            clap::error::ErrorKind::Io,
+            format!("failed to access project directory `{}`: {source}", dir.display()),
+        )
+    })?;
+
+    let file_count = count_project_files(&project_dir).map_err(io_error)?;
+    let detection = detect_rooms(&project_dir).map_err(io_error)?;
+
+    let runtime_paths = init_runtime_config(palace_override, context).map_err(config_error)?;
+    let config = load_runtime_config(palace_override, context).map_err(config_error)?;
+    let provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
+        .map_err(provider_error)?;
+    let validation = provider.startup_validation().map_err(provider_error)?;
+    log_startup_validation(&validation);
+
+    let config_path = project_dir.join("mempalace.yaml");
+    write_project_config(&config_path, &project_dir, &detection.rooms).map_err(io_error)?;
+
+    let mut lines = vec![
+        format!("\n{}", "=".repeat(INIT_HEADER_WIDTH)),
+        "  MemPalace Init — Local setup".to_owned(),
+        "=".repeat(INIT_HEADER_WIDTH),
+        String::new(),
+        format!("  WING: {}", wing_name_for_dir(&project_dir)),
+        format!("  ({} files found, rooms detected from {})", file_count, detection.source),
+        String::new(),
+    ];
+
+    for room in &detection.rooms {
+        lines.push(format!("    ROOM: {}", room.name));
+        lines
+            .push(format!("          {}", room.description.as_deref().unwrap_or("No description")));
+    }
+
+    lines.extend([
+        String::new(),
+        format!("{}", "─".repeat(INIT_HEADER_WIDTH)),
+        format!("  Config saved: {}", config_path.display()),
+        format!("  Palace path: {}", config.palace_path.display()),
+        format!("  Startup validation: {}", validation.status),
+        format!("  Global config: {}", runtime_paths.config_file.display()),
+        "  Next step:".to_owned(),
+        format!("    mempalace-cli mine {}", project_dir.display()),
+        format!("\n{}\n", "=".repeat(INIT_HEADER_WIDTH)),
+    ]);
+
+    Ok(CliOutput::success(lines.join("\n")))
+}
+
+fn execute_mine<F, P>(
+    dir: &Path,
+    mode: CliMode,
+    wing: Option<String>,
+    agent: String,
+    limit: usize,
+    dry_run: bool,
+    extract: CliExtractMode,
+    palace_override: Option<&Path>,
+    context: &CliContext,
+    provider_factory: F,
+) -> Result<CliOutput, clap::Error>
+where
+    F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>>,
+    P: EmbeddingProvider,
+{
+    let config = load_runtime_config(palace_override, context).map_err(config_error)?;
+    let runtime = Runtime::new().map_err(runtime_error)?;
+    let engine = runtime
+        .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
+        .map_err(storage_error)?;
+    let mut provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
+        .map_err(provider_error)?;
+
+    let source_dir = dir.canonicalize().map_err(|source| {
+        clap::Error::raw(
+            clap::error::ErrorKind::Io,
+            format!("failed to access source directory `{}`: {source}", dir.display()),
+        )
+    })?;
+
+    let summary = match mode {
+        CliMode::Projects => runtime
+            .block_on(ingest_project(
+                &engine,
+                &mut provider,
+                &ProjectIngestRequest {
+                    project_dir: source_dir.clone(),
+                    agent,
+                    limit: if limit == 0 { None } else { Some(limit) },
+                    dry_run,
+                },
+            ))
+            .map_err(ingest_error)?,
+        CliMode::Convos => runtime
+            .block_on(ingest_conversations(
+                &engine,
+                &mut provider,
+                &ConversationIngestRequest {
+                    convo_dir: source_dir.clone(),
+                    wing,
+                    agent,
+                    extract_mode: match extract {
+                        CliExtractMode::Exchange => ConversationExtractMode::Exchange,
+                        CliExtractMode::General => ConversationExtractMode::General,
+                    },
+                    limit: if limit == 0 { None } else { Some(limit) },
+                    dry_run,
+                },
+            ))
+            .map_err(ingest_error)?,
+    };
+
+    Ok(CliOutput::success(render_mine_summary(
+        mode,
+        &source_dir,
+        &config.palace_path,
+        dry_run,
+        &summary,
+    )))
+}
+
+fn execute_search<F, P>(
+    query: &str,
+    wing: Option<String>,
+    room: Option<String>,
+    results: usize,
+    palace_override: Option<&Path>,
+    context: &CliContext,
+    provider_factory: F,
+) -> Result<CliOutput, clap::Error>
+where
+    F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>>,
+    P: EmbeddingProvider,
+{
+    let config = load_runtime_config(palace_override, context).map_err(config_error)?;
+    if !palace_exists(&config.palace_path) {
+        return Ok(no_palace_error(&config.palace_path));
+    }
+
+    let runtime = Runtime::new().map_err(runtime_error)?;
+    let engine = runtime
+        .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
+        .map_err(storage_error)?;
+    let mut provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
+        .map_err(provider_error)?;
+    let mut search = SearchRuntime::new(provider);
+
+    let wing_id = wing.as_deref().map(WingId::new).transpose().map_err(id_error)?;
+    let room_id = room.as_deref().map(RoomId::new).transpose().map_err(id_error)?;
+    let rendered = runtime
+        .block_on(search.search_text(
+            engine.drawer_store(),
+            &SearchQuery {
+                text: query.to_owned(),
+                wing: wing_id,
+                room: room_id,
+                limit: results,
+                profile: config.embedding_profile,
+            },
+        ))
+        .map_err(search_error)?;
+
+    Ok(CliOutput::success(rendered))
+}
+
+fn execute_status(
+    palace_override: Option<&Path>,
+    context: &CliContext,
+) -> Result<CliOutput, clap::Error> {
+    let config = load_runtime_config(palace_override, context).map_err(config_error)?;
+    if !palace_exists(&config.palace_path) {
+        return Ok(CliOutput::success(no_palace_message(&config.palace_path)));
+    }
+
+    let runtime = Runtime::new().map_err(runtime_error)?;
+    let engine = runtime
+        .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
+        .map_err(storage_error)?;
+    let drawers = runtime
+        .block_on(engine.drawer_store().list_drawers(&DrawerFilter::default()))
+        .map_err(storage_error)?;
+
+    let mut wing_rooms = BTreeMap::<String, BTreeMap<String, usize>>::new();
+    for drawer in drawers {
+        *wing_rooms
+            .entry(drawer.wing.to_string())
+            .or_default()
+            .entry(drawer.room.to_string())
+            .or_default() += 1;
+    }
+
+    let mut lines = vec![
+        format!("\n{}", "=".repeat(STATUS_HEADER_WIDTH)),
+        format!(
+            "  MemPalace Status — {} drawers",
+            wing_rooms.values().map(|rooms| rooms.values().sum::<usize>()).sum::<usize>()
+        ),
+        "=".repeat(STATUS_HEADER_WIDTH),
+        String::new(),
+    ];
+
+    for (wing, rooms) in wing_rooms {
+        lines.push(format!("  WING: {wing}"));
+        let mut room_counts = rooms.into_iter().collect::<Vec<_>>();
+        room_counts.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        for (room, count) in room_counts {
+            lines.push(format!("    ROOM: {room:20} {count:5} drawers"));
+        }
+        lines.push(String::new());
+    }
+
+    lines.push("=".repeat(STATUS_HEADER_WIDTH));
+    lines.push(String::new());
+    Ok(CliOutput::success(lines.join("\n")))
+}
+
+fn execute_wake_up<F, P>(
+    wing: Option<String>,
+    palace_override: Option<&Path>,
+    context: &CliContext,
+    provider_factory: F,
+) -> Result<CliOutput, clap::Error>
+where
+    F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>>,
+    P: EmbeddingProvider,
+{
+    let config = load_runtime_config(palace_override, context).map_err(config_error)?;
+    let rendered = if !palace_exists(&config.palace_path) {
+        format!(
+            "{}\n\n## L1 — No palace found. Run: mempalace-cli init <dir> then mempalace-cli mine <dir>",
+            default_identity_banner()
+        )
+    } else {
+        let runtime = Runtime::new().map_err(runtime_error)?;
+        let engine = runtime
+            .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
+            .map_err(storage_error)?;
+        let provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
+            .map_err(provider_error)?;
+        let search = SearchRuntime::new(provider);
+        runtime
+            .block_on(search.wake_up(
+                engine.drawer_store(),
+                &WakeUpRequest {
+                    wing: wing.as_deref().map(WingId::new).transpose().map_err(id_error)?,
+                    ..WakeUpRequest::default()
+                },
+            ))
+            .map_err(search_error)?
+    };
+
+    let token_estimate = rendered.chars().count() / 4;
+    Ok(CliOutput::success(format!(
+        "Wake-up text (~{token_estimate} tokens):\n{}\n{}\n",
+        "=".repeat(WAKE_UP_SEPARATOR_WIDTH),
+        rendered
+    )))
+}
+
+fn render_mine_summary(
+    mode: CliMode,
+    source_dir: &Path,
+    palace_path: &Path,
+    dry_run: bool,
+    summary: &IngestSummary,
+) -> String {
+    let mode_name = match mode {
+        CliMode::Projects => "projects",
+        CliMode::Convos => "convos",
+    };
+
+    [
+        format!("\n{}", "=".repeat(SEARCH_HEADER_WIDTH)),
+        "  Mine complete".to_owned(),
+        "=".repeat(SEARCH_HEADER_WIDTH),
+        format!("  Mode: {mode_name}"),
+        format!("  Source: {}", source_dir.display()),
+        format!("  Palace: {}", palace_path.display()),
+        format!("  Dry run: {}", if dry_run { "yes" } else { "no" }),
+        format!("  Files discovered: {}", summary.discovered_files),
+        format!("  Files ignored: {}", summary.ignored_files),
+        format!("  Files unreadable: {}", summary.unreadable_files),
+        format!("  Files malformed: {}", summary.malformed_files),
+        format!("  Files skipped unchanged: {}", summary.skipped_unchanged),
+        format!("  Files ingested: {}", summary.ingested_files),
+        format!("  Drawers written: {}", summary.drawers_written),
+        format!("  Files truncated: {}", summary.truncated_files),
+        format!("{}\n", "=".repeat(SEARCH_HEADER_WIDTH)),
+    ]
+    .join("\n")
+}
+
+fn deferred_command(command: &str) -> CliOutput {
+    CliOutput::failure(
+        1,
+        format!(
+            "The `{command}` command is deferred in Rust Phase 9.\nSee {DEFERRED_COMMAND_DOC} for the explicit scope decision.\n"
+        ),
     )
+}
+
+fn no_palace_error(palace_path: &Path) -> CliOutput {
+    CliOutput::failure(1, no_palace_message(palace_path))
+}
+
+fn no_palace_message(palace_path: &Path) -> String {
+    format!(
+        "\n  No palace found at {}\n  Run: mempalace-cli init <dir> then mempalace-cli mine <dir>\n",
+        palace_path.display()
+    )
+}
+
+fn palace_exists(palace_path: &Path) -> bool {
+    let layout = StorageLayout::new(palace_path);
+    palace_path.exists() && (layout.sqlite_path.exists() || layout.lancedb_dir.exists())
+}
+
+fn init_runtime_config(
+    palace_override: Option<&Path>,
+    context: &CliContext,
+) -> Result<ResolvedPaths, mempalace_core::MempalaceError> {
+    let paths = ConfigLoader::init_default(context.config_base_dir.as_deref())?;
+    if let Some(palace_path) = palace_override {
+        fs::create_dir_all(palace_path).map_err(|source| {
+            mempalace_core::MempalaceError::ConfigWrite { path: palace_path.to_path_buf(), source }
+        })?;
+        write_global_config_override(&paths, palace_path)?;
+    }
+    Ok(paths)
+}
+
+fn load_runtime_config(
+    palace_override: Option<&Path>,
+    context: &CliContext,
+) -> Result<MempalaceConfig, mempalace_core::MempalaceError> {
+    let mut config = ConfigLoader::load_with_env(context.config_base_dir.as_deref())?;
+    if let Some(palace_path) = palace_override {
+        config.palace_path = palace_path.to_path_buf();
+    }
+    Ok(config)
+}
+
+fn write_global_config_override(
+    paths: &ResolvedPaths,
+    palace_path: &Path,
+) -> Result<(), mempalace_core::MempalaceError> {
+    let file = ConfigFileV1 {
+        palace_path: Some(palace_path.display().to_string()),
+        ..ConfigFileV1::default()
+    };
+    let body = serde_json::to_string_pretty(&file).map_err(|source| {
+        mempalace_core::MempalaceError::ConfigParse {
+            path: paths.config_file.clone(),
+            message: source.to_string(),
+        }
+    })?;
+    fs::write(&paths.config_file, body).map_err(|source| {
+        mempalace_core::MempalaceError::ConfigWrite { path: paths.config_file.clone(), source }
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RoomDetection {
+    source: &'static str,
+    rooms: Vec<ProjectRoomConfig>,
+}
+
+fn detect_rooms(project_dir: &Path) -> std::io::Result<RoomDetection> {
+    let mut discovered = BTreeMap::<String, String>::new();
+
+    for entry in fs::read_dir(project_dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().to_string();
+        if SKIP_DIRS.contains(&name.as_str()) {
+            continue;
+        }
+        record_room(&mut discovered, &name);
+    }
+
+    for entry in fs::read_dir(project_dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().to_string();
+        if SKIP_DIRS.contains(&name.as_str()) {
+            continue;
+        }
+
+        for subentry in fs::read_dir(entry.path())? {
+            let subentry = subentry?;
+            if !subentry.file_type()?.is_dir() {
+                continue;
+            }
+
+            let subname = subentry.file_name().to_string_lossy().to_string();
+            if SKIP_DIRS.contains(&subname.as_str()) {
+                continue;
+            }
+            record_room(&mut discovered, &subname);
+        }
+    }
+
+    let (source, rooms) = if discovered.is_empty() {
+        ("fallback", vec![project_room("general", "All project files", &["general"])])
+    } else {
+        (
+            "folder structure",
+            discovered
+                .into_iter()
+                .map(|(room, original)| {
+                    project_room(
+                        &room,
+                        &format!("Files from {original}/"),
+                        &[room.as_str(), original.as_str()],
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+
+    let mut deduped = BTreeMap::<String, ProjectRoomConfig>::new();
+    for room in rooms {
+        deduped.entry(room.name.clone()).or_insert(room);
+    }
+    let mut deduped = deduped.into_values().collect::<Vec<_>>();
+    if !deduped.iter().any(|room| room.name == "general") {
+        deduped.push(project_room("general", "Files that don't fit other rooms", &[]));
+    }
+
+    deduped.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(RoomDetection { source, rooms: deduped })
+}
+
+fn record_room(discovered: &mut BTreeMap<String, String>, raw_name: &str) {
+    let normalized = raw_name.to_lowercase().replace('-', "_").replace(' ', "_");
+    let room_name = FOLDER_ROOM_MAP
+        .iter()
+        .find_map(|(key, room)| (*key == normalized).then_some((*room).to_owned()))
+        .unwrap_or_else(|| normalized);
+    discovered.entry(room_name).or_insert_with(|| raw_name.to_owned());
+}
+
+fn project_room(name: &str, description: &str, keywords: &[&str]) -> ProjectRoomConfig {
+    ProjectRoomConfig {
+        name: name.to_owned(),
+        description: Some(description.to_owned()),
+        keywords: keywords.iter().map(|value| (*value).to_owned()).collect(),
+    }
+}
+
+fn write_project_config(
+    config_path: &Path,
+    project_dir: &Path,
+    rooms: &[ProjectRoomConfig],
+) -> std::io::Result<()> {
+    let mut root = Mapping::new();
+    root.insert(
+        serde_yaml::Value::String("wing".to_owned()),
+        serde_yaml::Value::String(wing_name_for_dir(project_dir)),
+    );
+    root.insert(
+        serde_yaml::Value::String("rooms".to_owned()),
+        serde_yaml::to_value(rooms).map_err(|error| std::io::Error::other(error.to_string()))?,
+    );
+
+    fs::write(
+        config_path,
+        serde_yaml::to_string(&root).map_err(|error| std::io::Error::other(error.to_string()))?,
+    )
+}
+
+fn wing_name_for_dir(project_dir: &Path) -> String {
+    project_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("project")
+        .to_lowercase()
+        .replace('-', "_")
+        .replace(' ', "_")
+}
+
+fn count_project_files(project_dir: &Path) -> std::io::Result<usize> {
+    let mut total = 0usize;
+    let mut stack = vec![project_dir.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            if file_type.is_dir() {
+                if !SKIP_DIRS.contains(&name.as_str()) {
+                    stack.push(path);
+                }
+                continue;
+            }
+
+            let extension = path.extension().and_then(|value| value.to_str()).unwrap_or_default();
+            if PROJECT_FILE_EXTENSIONS.contains(&extension) {
+                total += 1;
+            }
+        }
+    }
+
+    Ok(total)
 }
 
 fn default_embedding_cache_dir() -> PathBuf {
@@ -91,115 +901,273 @@ fn default_embedding_cache_dir() -> PathBuf {
         .join("embeddings")
 }
 
-fn log_init_outcome(
-    config_file: &std::path::Path,
-    palace_path: &std::path::Path,
-    embedding_profile: EmbeddingProfile,
-    validation_status: StartupValidationStatus,
-) {
-    match validation_status {
-        StartupValidationStatus::Ready => tracing::info!(
-            config_file = %config_file.display(),
-            palace_path = %palace_path.display(),
-            embedding_profile = embedding_profile.as_str(),
-            "{}",
-            init_outcome_message(validation_status)
-        ),
-        StartupValidationStatus::MissingAssets | StartupValidationStatus::PartialDownload => {
-            tracing::warn!(
-                config_file = %config_file.display(),
-                palace_path = %palace_path.display(),
-                embedding_profile = embedding_profile.as_str(),
-                startup_validation = %validation_status,
-                "{}",
-                init_outcome_message(validation_status)
-            )
-        }
-        StartupValidationStatus::CorruptedCache => tracing::warn!(
-            config_file = %config_file.display(),
-            palace_path = %palace_path.display(),
-            embedding_profile = embedding_profile.as_str(),
-            startup_validation = %validation_status,
-            "{}",
-            init_outcome_message(validation_status)
-        ),
-    }
+fn default_identity_banner() -> &'static str {
+    "## L0 — IDENTITY\nNo identity configured. Create ~/.mempalace/identity.txt"
 }
 
-fn init_outcome_message(validation_status: StartupValidationStatus) -> &'static str {
-    match validation_status {
-        StartupValidationStatus::Ready => "mempalace cli foundation initialized",
-        StartupValidationStatus::MissingAssets | StartupValidationStatus::PartialDownload => {
-            "mempalace cli foundation configured; embedding assets must be downloaded before offline use"
-        }
-        StartupValidationStatus::CorruptedCache => {
-            "mempalace cli foundation configured; embedding cache is corrupted and must be refreshed"
-        }
-    }
+fn fastembed_provider(
+    profile: EmbeddingProfile,
+    cache_root: PathBuf,
+) -> Result<FastembedProvider, Box<dyn std::error::Error>> {
+    Ok(FastembedProvider::new(profile, FastembedProviderConfig::new(cache_root)))
+}
+
+fn config_error(error: mempalace_core::MempalaceError) -> clap::Error {
+    clap::Error::raw(clap::error::ErrorKind::Io, error.to_string())
+}
+
+fn ingest_error(error: mempalace_ingest::IngestError) -> clap::Error {
+    clap::Error::raw(clap::error::ErrorKind::Io, error.to_string())
+}
+
+fn provider_error(error: Box<dyn std::error::Error>) -> clap::Error {
+    clap::Error::raw(clap::error::ErrorKind::Io, error.to_string())
+}
+
+fn runtime_error(error: std::io::Error) -> clap::Error {
+    clap::Error::raw(clap::error::ErrorKind::Io, error.to_string())
+}
+
+fn search_error(error: mempalace_search::SearchError) -> clap::Error {
+    clap::Error::raw(clap::error::ErrorKind::Io, error.to_string())
+}
+
+fn storage_error(error: mempalace_storage::StorageError) -> clap::Error {
+    clap::Error::raw(clap::error::ErrorKind::Io, error.to_string())
+}
+
+fn io_error(error: std::io::Error) -> clap::Error {
+    clap::Error::raw(clap::error::ErrorKind::Io, error.to_string())
+}
+
+fn id_error(error: mempalace_core::IdError) -> clap::Error {
+    clap::Error::raw(clap::error::ErrorKind::InvalidValue, error.to_string())
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
-    use super::{
-        Command, EmbeddingProfile, StartupValidationStatus, init_outcome_message, log_init_outcome,
-        parse_args, usage,
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use mempalace_embeddings::{
+        EmbeddingProfileMetadata, EmbeddingRequest, EmbeddingResponse, StartupValidation,
+        StartupValidationStatus,
     };
-    use std::path::Path;
+    use tempfile::tempdir;
 
-    #[test]
-    fn parses_default_invocation_as_init() {
-        assert!(matches!(parse_args(Vec::new()), Ok(Command::Init)));
+    #[derive(Debug, Clone)]
+    struct StubProvider {
+        profile: EmbeddingProfile,
     }
 
-    #[test]
-    fn parses_help_without_init_side_effects() {
-        assert!(matches!(parse_args(vec!["--help".to_owned()]), Ok(Command::Help)));
-        assert!(usage().contains("Usage:"));
-    }
-
-    #[test]
-    fn parses_version_without_init_side_effects() {
-        assert!(matches!(parse_args(vec!["--version".to_owned()]), Ok(Command::Version)));
-    }
-
-    #[test]
-    fn rejects_unknown_args() {
-        assert!(matches!(
-            parse_args(vec!["status".to_owned()]),
-            Err(err) if err.contains("unrecognized arguments")
-        ));
-    }
-
-    #[test]
-    fn init_outcome_logging_branches_for_each_validation_state() {
-        for status in [
-            StartupValidationStatus::Ready,
-            StartupValidationStatus::MissingAssets,
-            StartupValidationStatus::PartialDownload,
-            StartupValidationStatus::CorruptedCache,
-        ] {
-            log_init_outcome(
-                Path::new("/tmp/config.toml"),
-                Path::new("/tmp/palace"),
-                EmbeddingProfile::Balanced,
-                status,
-            );
+    impl StubProvider {
+        fn new(profile: EmbeddingProfile) -> Self {
+            Self { profile }
         }
     }
 
+    impl EmbeddingProvider for StubProvider {
+        fn profile(&self) -> &'static EmbeddingProfileMetadata {
+            self.profile.metadata()
+        }
+
+        fn startup_validation(&self) -> mempalace_embeddings::Result<StartupValidation> {
+            Ok(StartupValidation {
+                status: StartupValidationStatus::Ready,
+                cache_root: PathBuf::from("/tmp/stub-cache"),
+                model_id: self.profile.metadata().model_id,
+                detail: "stub".to_owned(),
+            })
+        }
+
+        fn embed(
+            &mut self,
+            request: &EmbeddingRequest,
+        ) -> mempalace_embeddings::Result<EmbeddingResponse> {
+            let dimensions = self.profile.metadata().dimensions;
+            let vectors = request
+                .texts()
+                .iter()
+                .map(|text| stub_vector(text, dimensions))
+                .collect::<Vec<_>>();
+            EmbeddingResponse::from_vectors(
+                vectors,
+                dimensions,
+                self.profile,
+                self.profile.metadata().model_id,
+            )
+        }
+    }
+
+    fn stub_provider(
+        profile: EmbeddingProfile,
+        _cache_root: PathBuf,
+    ) -> Result<StubProvider, Box<dyn std::error::Error>> {
+        Ok(StubProvider::new(profile))
+    }
+
+    fn stub_vector(text: &str, dimensions: usize) -> Vec<f32> {
+        let lowered = text.to_lowercase();
+        let seed = if lowered.contains("auth") || lowered.contains("login") {
+            [1.0, 0.0, 0.0, 0.0]
+        } else if lowered.contains("roadmap") || lowered.contains("plan") {
+            [0.0, 1.0, 0.0, 0.0]
+        } else {
+            [0.0, 0.0, 1.0, 0.0]
+        };
+
+        let mut values = Vec::with_capacity(dimensions);
+        while values.len() < dimensions {
+            values.extend(seed);
+        }
+        values.truncate(dimensions);
+        values
+    }
+
+    fn temp_config_root(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).expect("system clock").as_nanos();
+        std::env::temp_dir().join(format!("mempalace-cli-{prefix}-{nanos}"))
+    }
+
+    fn write_file(path: &Path, body: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent directories");
+        }
+        fs::write(path, body).expect("write fixture file");
+    }
+
+    fn setup_project_fixture(root: &Path) -> PathBuf {
+        let project = root.join("project-alpha");
+        write_file(
+            &project.join("backend/auth.rs"),
+            "Auth login flow keeps auth checks in the backend service.\n",
+        );
+        write_file(
+            &project.join("docs/roadmap.md"),
+            "Roadmap plan tracks the migration milestones and release plan.\n",
+        );
+        write_file(&project.join("README.md"), "Project overview for auth migration.\n");
+        project
+    }
+
     #[test]
-    fn init_outcome_warning_states_use_configured_wording() {
-        assert_eq!(
-            init_outcome_message(StartupValidationStatus::MissingAssets),
-            "mempalace cli foundation configured; embedding assets must be downloaded before offline use"
-        );
-        assert_eq!(
-            init_outcome_message(StartupValidationStatus::PartialDownload),
-            "mempalace cli foundation configured; embedding assets must be downloaded before offline use"
-        );
-        assert_eq!(
-            init_outcome_message(StartupValidationStatus::CorruptedCache),
-            "mempalace cli foundation configured; embedding cache is corrupted and must be refreshed"
-        );
+    fn help_lists_phase9_commands_and_deferred_entries() {
+        let output = run_cli(["--help"], &CliContext::production(), stub_provider).unwrap();
+        assert_eq!(output.exit_code, 0);
+        assert!(output.stdout.contains("init"));
+        assert!(output.stdout.contains("mine"));
+        assert!(output.stdout.contains("search"));
+        assert!(output.stdout.contains("status"));
+        assert!(output.stdout.contains("wake-up"));
+        assert!(output.stdout.contains("split"));
+        assert!(output.stdout.contains("compress"));
+    }
+
+    #[test]
+    fn no_command_prints_help_and_exits_zero() {
+        let output =
+            run_cli(std::iter::empty::<&str>(), &CliContext::production(), stub_provider).unwrap();
+        assert_eq!(output.exit_code, 0);
+        assert!(output.stdout.contains("Usage:"));
+    }
+
+    #[test]
+    fn deferred_commands_fail_with_explicit_record() {
+        let split =
+            run_cli(["split", "fixtures"], &CliContext::production(), stub_provider).unwrap();
+        assert_eq!(split.exit_code, 1);
+        assert!(split.stderr.contains(DEFERRED_COMMAND_DOC));
+
+        let compress = run_cli(["compress"], &CliContext::production(), stub_provider).unwrap();
+        assert_eq!(compress.exit_code, 1);
+        assert!(compress.stderr.contains("deferred"));
+    }
+
+    #[test]
+    fn init_creates_project_config_and_global_config() {
+        let workspace = tempdir().unwrap();
+        let project_dir = setup_project_fixture(workspace.path());
+        let config_root = temp_config_root("init");
+        let context = CliContext::for_tests(config_root.clone());
+
+        let output =
+            run_cli(["init", project_dir.to_str().unwrap(), "--yes"], &context, stub_provider)
+                .unwrap();
+
+        assert_eq!(output.exit_code, 0);
+        assert!(output.stdout.contains("MemPalace Init"));
+        assert!(project_dir.join("mempalace.yaml").exists());
+        assert!(config_root.join("config.json").exists());
+        assert!(config_root.join("palace").exists());
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn mine_search_status_and_wakeup_work_end_to_end() {
+        let workspace = tempdir().unwrap();
+        let project_dir = setup_project_fixture(workspace.path());
+        let config_root = temp_config_root("e2e");
+        let context = CliContext::for_tests(config_root.clone());
+
+        run_cli(["init", project_dir.to_str().unwrap(), "--yes"], &context, stub_provider).unwrap();
+
+        let mine =
+            run_cli(["mine", project_dir.to_str().unwrap()], &context, stub_provider).unwrap();
+        assert_eq!(mine.exit_code, 0);
+        assert!(mine.stdout.contains("Files ingested: 3"));
+
+        let search = run_cli(["search", "auth login"], &context, stub_provider).unwrap();
+        assert_eq!(search.exit_code, 0);
+        assert!(search.stdout.contains("Results for: \"auth login\""));
+        assert!(search.stdout.contains("backend"));
+
+        let status = run_cli(["status"], &context, stub_provider).unwrap();
+        assert_eq!(status.exit_code, 0);
+        assert!(status.stdout.contains("MemPalace Status"));
+        assert!(status.stdout.contains("WING: project_alpha"));
+
+        let wake_up = run_cli(["wake-up"], &context, stub_provider).unwrap();
+        assert_eq!(wake_up.exit_code, 0);
+        assert!(wake_up.stdout.contains("Wake-up text"));
+        assert!(wake_up.stdout.contains("ESSENTIAL STORY"));
+
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn mine_dry_run_reports_work_without_writing_drawers() {
+        let workspace = tempdir().unwrap();
+        let project_dir = setup_project_fixture(workspace.path());
+        let config_root = temp_config_root("dry-run");
+        let context = CliContext::for_tests(config_root.clone());
+
+        run_cli(["init", project_dir.to_str().unwrap(), "--yes"], &context, stub_provider).unwrap();
+
+        let output = run_cli(
+            ["mine", project_dir.to_str().unwrap(), "--dry-run", "--limit", "1"],
+            &context,
+            stub_provider,
+        )
+        .unwrap();
+        assert_eq!(output.exit_code, 0);
+        assert!(output.stdout.contains("Dry run: yes"));
+        assert!(output.stdout.contains("Files ingested: 1"));
+
+        let status = run_cli(["status"], &context, stub_provider).unwrap();
+        assert!(status.stdout.contains("MemPalace Status — 0 drawers"));
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn search_without_a_palace_exits_non_zero() {
+        let config_root = temp_config_root("missing");
+        fs::create_dir_all(&config_root).unwrap();
+        let context = CliContext::for_tests(config_root.clone());
+
+        let output = run_cli(["search", "auth"], &context, stub_provider).unwrap();
+        assert_eq!(output.exit_code, 1);
+        assert!(output.stderr.contains("No palace found"));
+        fs::remove_dir_all(config_root).unwrap();
     }
 }

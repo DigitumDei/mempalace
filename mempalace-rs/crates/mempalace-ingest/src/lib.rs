@@ -322,11 +322,18 @@ pub struct IngestSummary {
 pub struct ProjectIngestRequest {
     pub project_dir: PathBuf,
     pub agent: String,
+    pub limit: Option<usize>,
+    pub dry_run: bool,
 }
 
 impl ProjectIngestRequest {
     pub fn new(project_dir: impl AsRef<Path>) -> Self {
-        Self { project_dir: project_dir.as_ref().to_path_buf(), agent: "mempalace-rs".to_owned() }
+        Self {
+            project_dir: project_dir.as_ref().to_path_buf(),
+            agent: "mempalace-rs".to_owned(),
+            limit: None,
+            dry_run: false,
+        }
     }
 }
 
@@ -336,6 +343,8 @@ pub struct ConversationIngestRequest {
     pub wing: Option<String>,
     pub agent: String,
     pub extract_mode: ConversationExtractMode,
+    pub limit: Option<usize>,
+    pub dry_run: bool,
 }
 
 impl ConversationIngestRequest {
@@ -345,6 +354,8 @@ impl ConversationIngestRequest {
             wing: None,
             agent: "mempalace-rs".to_owned(),
             extract_mode: ConversationExtractMode::Exchange,
+            limit: None,
+            dry_run: false,
         }
     }
 }
@@ -426,7 +437,9 @@ pub async fn ingest_project<P: EmbeddingProvider>(
     summary.discovered_files = discovered.files.len();
     summary.ignored_files = discovered.ignored_files;
 
-    for file in discovered.files {
+    let files = apply_limit(discovered.files, request.limit);
+
+    for file in files {
         match read_text_document(&file.absolute_path) {
             Ok(document) => {
                 let source_key =
@@ -441,15 +454,17 @@ pub async fn ingest_project<P: EmbeddingProvider>(
                 }
 
                 if document.content.trim().len() < PROJECT_MIN_CHUNK_SIZE {
-                    replace_source_drawers(
-                        engine,
-                        &source_key,
-                        &file.relative_path,
-                        "projects",
-                        content_hash,
-                        Vec::new(),
-                    )
-                    .await?;
+                    if !request.dry_run {
+                        replace_source_drawers(
+                            engine,
+                            &source_key,
+                            &file.relative_path,
+                            "projects",
+                            content_hash,
+                            Vec::new(),
+                        )
+                        .await?;
+                    }
                     summary.ingested_files += 1;
                     summary.truncated_files += usize::from(document.truncated);
                     continue;
@@ -462,15 +477,17 @@ pub async fn ingest_project<P: EmbeddingProvider>(
                 );
                 let chunks = chunk_project_text(&document.content);
                 if chunks.is_empty() {
-                    replace_source_drawers(
-                        engine,
-                        &source_key,
-                        &file.relative_path,
-                        "projects",
-                        content_hash,
-                        Vec::new(),
-                    )
-                    .await?;
+                    if !request.dry_run {
+                        replace_source_drawers(
+                            engine,
+                            &source_key,
+                            &file.relative_path,
+                            "projects",
+                            content_hash,
+                            Vec::new(),
+                        )
+                        .await?;
+                    }
                     summary.ingested_files += 1;
                     summary.truncated_files += usize::from(document.truncated);
                     continue;
@@ -496,15 +513,17 @@ pub async fn ingest_project<P: EmbeddingProvider>(
                 )?;
                 let drawer_count = source_drawers.len();
 
-                replace_source_drawers(
-                    engine,
-                    &source_key,
-                    &file.relative_path,
-                    "projects",
-                    content_hash,
-                    source_drawers,
-                )
-                .await?;
+                if !request.dry_run {
+                    replace_source_drawers(
+                        engine,
+                        &source_key,
+                        &file.relative_path,
+                        "projects",
+                        content_hash,
+                        source_drawers,
+                    )
+                    .await?;
+                }
 
                 summary.ingested_files += 1;
                 summary.drawers_written += drawer_count;
@@ -539,7 +558,9 @@ pub async fn ingest_conversations<P: EmbeddingProvider>(
     summary.discovered_files = discovered.files.len();
     summary.ignored_files = discovered.ignored_files;
 
-    for file in discovered.files {
+    let files = apply_limit(discovered.files, request.limit);
+
+    for file in files {
         let bytes = match fs::read(&file.absolute_path) {
             Ok(bytes) => bytes,
             Err(source) => {
@@ -579,15 +600,17 @@ pub async fn ingest_conversations<P: EmbeddingProvider>(
         };
 
         if chunks.is_empty() {
-            replace_source_drawers(
-                engine,
-                &source_key,
-                &file.relative_path,
-                "convos",
-                content_hash,
-                Vec::new(),
-            )
-            .await?;
+            if !request.dry_run {
+                replace_source_drawers(
+                    engine,
+                    &source_key,
+                    &file.relative_path,
+                    "convos",
+                    content_hash,
+                    Vec::new(),
+                )
+                .await?;
+            }
             summary.ingested_files += 1;
             continue;
         }
@@ -613,15 +636,17 @@ pub async fn ingest_conversations<P: EmbeddingProvider>(
         )?;
         let drawer_count = drawers.len();
 
-        replace_source_drawers(
-            engine,
-            &source_key,
-            &file.relative_path,
-            "convos",
-            content_hash,
-            drawers,
-        )
-        .await?;
+        if !request.dry_run {
+            replace_source_drawers(
+                engine,
+                &source_key,
+                &file.relative_path,
+                "convos",
+                content_hash,
+                drawers,
+            )
+            .await?;
+        }
         summary.ingested_files += 1;
         summary.drawers_written += drawer_count;
     }
@@ -712,6 +737,16 @@ fn discover_project_files(root: &Path) -> Result<DiscoveryReport> {
 
 fn discover_conversation_files(root: &Path) -> Result<DiscoveryReport> {
     discover_files(root, CONVO_EXTENSIONS, false)
+}
+
+fn apply_limit(
+    files: Vec<DiscoveredSource>,
+    limit: Option<usize>,
+) -> Box<dyn Iterator<Item = DiscoveredSource>> {
+    match limit {
+        Some(limit) => Box::new(files.into_iter().take(limit)),
+        None => Box::new(files.into_iter()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1209,11 +1244,7 @@ fn extract_content(value: &Value) -> Option<String> {
                 })
                 .collect::<Vec<_>>();
             let combined = parts.join(" ").trim().to_owned();
-            if combined.is_empty() {
-                None
-            } else {
-                Some(combined)
-            }
+            if combined.is_empty() { None } else { Some(combined) }
         }
         Value::Object(object) => {
             object.get("text").and_then(Value::as_str).map(|text| text.trim().to_owned())
@@ -1377,11 +1408,7 @@ fn should_skip_spellcheck(token: &str) -> bool {
 fn chunk_exchanges(content: &str) -> Vec<Chunk> {
     let lines = content.lines().collect::<Vec<_>>();
     let quote_lines = lines.iter().filter(|line| line.trim_start().starts_with('>')).count();
-    if quote_lines >= 3 {
-        chunk_by_exchange(&lines)
-    } else {
-        chunk_by_paragraph(content)
-    }
+    if quote_lines >= 3 { chunk_by_exchange(&lines) } else { chunk_by_paragraph(content) }
 }
 
 fn chunk_by_exchange(lines: &[&str]) -> Vec<Chunk> {
@@ -1607,11 +1634,7 @@ fn extract_prose(text: &str) -> String {
         prose.push(line);
     }
     let joined = prose.join("\n").trim().to_owned();
-    if joined.is_empty() {
-        text.to_owned()
-    } else {
-        joined
-    }
+    if joined.is_empty() { text.to_owned() } else { joined }
 }
 
 fn is_code_line(line: &str) -> bool {
@@ -1974,7 +1997,12 @@ mod tests {
         let summary = ingest_project(
             &engine,
             &mut provider,
-            &ProjectIngestRequest { project_dir: fixture_root.clone(), agent: "tester".to_owned() },
+            &ProjectIngestRequest {
+                project_dir: fixture_root.clone(),
+                agent: "tester".to_owned(),
+                limit: None,
+                dry_run: false,
+            },
         )
         .await
         .unwrap();
@@ -2017,6 +2045,8 @@ mod tests {
                 wing: Some("phase0_convos".to_owned()),
                 agent: "tester".to_owned(),
                 extract_mode: ConversationExtractMode::Exchange,
+                limit: None,
+                dry_run: false,
             },
         )
         .await
@@ -2031,6 +2061,8 @@ mod tests {
                 wing: Some("phase0_convos".to_owned()),
                 agent: "tester".to_owned(),
                 extract_mode: ConversationExtractMode::General,
+                limit: None,
+                dry_run: false,
             },
         )
         .await
@@ -2082,6 +2114,8 @@ mod tests {
                 wing: Some("wing_a".to_owned()),
                 agent: "tester".to_owned(),
                 extract_mode: ConversationExtractMode::Exchange,
+                limit: None,
+                dry_run: false,
             },
         )
         .await
@@ -2094,6 +2128,8 @@ mod tests {
                 wing: Some("wing_b".to_owned()),
                 agent: "tester".to_owned(),
                 extract_mode: ConversationExtractMode::Exchange,
+                limit: None,
+                dry_run: false,
             },
         )
         .await
@@ -2112,6 +2148,8 @@ mod tests {
                 wing: Some("wing_a".to_owned()),
                 agent: "tester".to_owned(),
                 extract_mode: ConversationExtractMode::Exchange,
+                limit: None,
+                dry_run: false,
             },
         )
         .await
@@ -2152,14 +2190,24 @@ mod tests {
         let first = ingest_project(
             &engine,
             &mut provider,
-            &ProjectIngestRequest { project_dir: project_dir.clone(), agent: "tester".to_owned() },
+            &ProjectIngestRequest {
+                project_dir: project_dir.clone(),
+                agent: "tester".to_owned(),
+                limit: None,
+                dry_run: false,
+            },
         )
         .await
         .unwrap();
         let second = ingest_project(
             &engine,
             &mut provider,
-            &ProjectIngestRequest { project_dir: project_dir.clone(), agent: "tester".to_owned() },
+            &ProjectIngestRequest {
+                project_dir: project_dir.clone(),
+                agent: "tester".to_owned(),
+                limit: None,
+                dry_run: false,
+            },
         )
         .await
         .unwrap();
@@ -2174,7 +2222,12 @@ mod tests {
         let third = ingest_project(
             &engine,
             &mut provider,
-            &ProjectIngestRequest { project_dir: project_dir.clone(), agent: "tester".to_owned() },
+            &ProjectIngestRequest {
+                project_dir: project_dir.clone(),
+                agent: "tester".to_owned(),
+                limit: None,
+                dry_run: false,
+            },
         )
         .await
         .unwrap();
@@ -2214,7 +2267,12 @@ mod tests {
         let first = ingest_project(
             &engine,
             &mut provider,
-            &ProjectIngestRequest { project_dir: project_dir.clone(), agent: "tester".to_owned() },
+            &ProjectIngestRequest {
+                project_dir: project_dir.clone(),
+                agent: "tester".to_owned(),
+                limit: None,
+                dry_run: false,
+            },
         )
         .await
         .unwrap();
@@ -2224,7 +2282,12 @@ mod tests {
         let second = ingest_project(
             &engine,
             &mut provider,
-            &ProjectIngestRequest { project_dir: project_dir.clone(), agent: "tester".to_owned() },
+            &ProjectIngestRequest {
+                project_dir: project_dir.clone(),
+                agent: "tester".to_owned(),
+                limit: None,
+                dry_run: false,
+            },
         )
         .await
         .unwrap();
@@ -2264,7 +2327,12 @@ mod tests {
         ingest_project(
             &engine,
             &mut provider,
-            &ProjectIngestRequest { project_dir: project_dir.clone(), agent: "tester".to_owned() },
+            &ProjectIngestRequest {
+                project_dir: project_dir.clone(),
+                agent: "tester".to_owned(),
+                limit: None,
+                dry_run: false,
+            },
         )
         .await
         .unwrap();
@@ -2277,7 +2345,12 @@ mod tests {
         let rerun = ingest_project(
             &engine,
             &mut provider,
-            &ProjectIngestRequest { project_dir: project_dir.clone(), agent: "tester".to_owned() },
+            &ProjectIngestRequest {
+                project_dir: project_dir.clone(),
+                agent: "tester".to_owned(),
+                limit: None,
+                dry_run: false,
+            },
         )
         .await
         .unwrap();
@@ -2316,6 +2389,8 @@ mod tests {
                 wing: Some("mixed".to_owned()),
                 agent: "tester".to_owned(),
                 extract_mode: ConversationExtractMode::Exchange,
+                limit: None,
+                dry_run: false,
             },
         )
         .await
