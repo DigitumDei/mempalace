@@ -449,7 +449,7 @@ where
     let engine = runtime
         .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
         .map_err(storage_error)?;
-    let mut provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
+    let provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
         .map_err(provider_error)?;
 
     let source_dir = dir.canonicalize().map_err(|source| {
@@ -920,7 +920,10 @@ fn ingest_error(error: mempalace_ingest::IngestError) -> clap::Error {
     clap::Error::raw(clap::error::ErrorKind::Io, error.to_string())
 }
 
-fn provider_error(error: Box<dyn std::error::Error>) -> clap::Error {
+fn provider_error<E>(error: E) -> clap::Error
+where
+    E: std::fmt::Display,
+{
     clap::Error::raw(clap::error::ErrorKind::Io, error.to_string())
 }
 
@@ -951,9 +954,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use mempalace_embeddings::{
-        EmbeddingProfileMetadata, EmbeddingRequest, EmbeddingResponse, StartupValidation,
-        StartupValidationStatus,
+        EmbeddingRequest, EmbeddingResponse, StartupValidation, StartupValidationStatus,
     };
+    use mempalace_core::EmbeddingProfileMetadata;
     use tempfile::tempdir;
 
     #[derive(Debug, Clone)]
