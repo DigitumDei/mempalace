@@ -126,7 +126,12 @@ const FOLDER_ROOM_MAP: &[(&str, &str)] = &[
 fn main() {
     init_tracing("info");
 
-    let result = run_cli(env::args_os().skip(1), &CliContext::production(), fastembed_provider);
+    let result = run_cli_with_validation_factory(
+        env::args_os().skip(1),
+        &CliContext::production(),
+        fastembed_provider,
+        fastembed_validation_provider,
+    );
 
     match result {
         Ok(output) => {
@@ -287,8 +292,25 @@ fn run_cli<I, T, F, P>(
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
+    F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>> + Copy,
+    P: EmbeddingProvider,
+{
+    run_cli_with_validation_factory(args, context, provider_factory, provider_factory)
+}
+
+fn run_cli_with_validation_factory<I, T, F, P, G, Q>(
+    args: I,
+    context: &CliContext,
+    provider_factory: F,
+    validation_provider_factory: G,
+) -> Result<CliOutput, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
     F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>>,
     P: EmbeddingProvider,
+    G: Fn(EmbeddingProfile, PathBuf) -> Result<Q, Box<dyn std::error::Error>>,
+    Q: EmbeddingProvider,
 {
     let argv = std::iter::once(std::ffi::OsString::from("mempalace-cli"))
         .chain(args.into_iter().map(Into::into))
@@ -308,7 +330,7 @@ where
         return Ok(CliOutput::success(render_help()));
     }
 
-    execute(cli, context, provider_factory)
+    execute(cli, context, provider_factory, validation_provider_factory)
 }
 
 fn render_help() -> String {
@@ -320,21 +342,24 @@ fn render_help() -> String {
     String::from_utf8_lossy(&buffer).into_owned()
 }
 
-fn execute<F, P>(
+fn execute<F, P, G, Q>(
     cli: Cli,
     context: &CliContext,
     provider_factory: F,
+    validation_provider_factory: G,
 ) -> Result<CliOutput, clap::Error>
 where
     F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>>,
     P: EmbeddingProvider,
+    G: Fn(EmbeddingProfile, PathBuf) -> Result<Q, Box<dyn std::error::Error>>,
+    Q: EmbeddingProvider,
 {
     let Some(command) = cli.command else {
         return Ok(CliOutput::success(render_help()));
     };
     match command {
         Commands::Init { dir, yes } => {
-            execute_init(&dir, yes, cli.palace.as_deref(), context, provider_factory)
+            execute_init(&dir, yes, cli.palace.as_deref(), context, validation_provider_factory)
         }
         Commands::Mine { dir, mode, wing, agent, limit, dry_run, extract } => execute_mine(
             &dir,
@@ -377,13 +402,6 @@ where
     F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>>,
     P: EmbeddingProvider,
 {
-    if !yes {
-        return Ok(CliOutput::failure(
-            1,
-            "Rust Phase 9 init is non-interactive. Re-run with `--yes` to accept the detected rooms.\n",
-        ));
-    }
-
     let project_dir = dir.canonicalize().map_err(|source| {
         clap::Error::raw(
             clap::error::ErrorKind::Io,
@@ -393,6 +411,18 @@ where
 
     let file_count = count_project_files(&project_dir).map_err(io_error)?;
     let detection = detect_rooms(&project_dir).map_err(io_error)?;
+    let config_path = project_dir.join("mempalace.yaml");
+
+    if config_path.exists() && !yes {
+        return Ok(CliOutput::failure(
+            1,
+            format!(
+                "{} already exists; re-run `mempalace-cli init {}` with `--yes` to overwrite it\n",
+                config_path.display(),
+                project_dir.display()
+            ),
+        ));
+    }
 
     let runtime_paths = init_runtime_config(palace_override, context).map_err(config_error)?;
     let config = load_runtime_config(palace_override, context).map_err(config_error)?;
@@ -401,7 +431,6 @@ where
     let validation = provider.startup_validation().map_err(provider_error)?;
     log_startup_validation(&validation);
 
-    let config_path = project_dir.join("mempalace.yaml");
     write_project_config(&config_path, &project_dir, &detection.rooms, yes).map_err(io_error)?;
 
     let mut lines = vec![
@@ -451,6 +480,13 @@ where
     F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>>,
     P: EmbeddingProvider,
 {
+    let source_dir = dir.canonicalize().map_err(|source| {
+        clap::Error::raw(
+            clap::error::ErrorKind::Io,
+            format!("failed to access source directory `{}`: {source}", dir.display()),
+        )
+    })?;
+
     let config = load_runtime_config(palace_override, context).map_err(config_error)?;
     let use_temp_storage = dry_run && !palace_exists(&config.palace_path);
     let runtime = Runtime::new().map_err(runtime_error)?;
@@ -463,13 +499,6 @@ where
         .map_err(storage_error)?;
     let mut provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
         .map_err(provider_error)?;
-
-    let source_dir = dir.canonicalize().map_err(|source| {
-        clap::Error::raw(
-            clap::error::ErrorKind::Io,
-            format!("failed to access source directory `{}`: {source}", dir.display()),
-        )
-    })?;
 
     let summary = match mode {
         CliMode::Projects => runtime
@@ -619,29 +648,32 @@ where
     P: EmbeddingProvider,
 {
     let config = load_runtime_config(palace_override, context).map_err(config_error)?;
-    let rendered = if !palace_exists(&config.palace_path) {
-        format!(
-            "{}\n\n## L1 — No palace found. Run: mempalace-cli init <dir> then mempalace-cli mine <dir>",
-            default_identity_banner()
-        )
-    } else {
-        let runtime = Runtime::new().map_err(runtime_error)?;
-        let engine = runtime
-            .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
-            .map_err(storage_error)?;
-        let provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
-            .map_err(provider_error)?;
-        let search = SearchRuntime::new(provider);
-        runtime
-            .block_on(search.wake_up(
-                engine.drawer_store(),
-                &WakeUpRequest {
-                    wing: wing.as_deref().map(WingId::new).transpose().map_err(id_error)?,
-                    ..WakeUpRequest::default()
-                },
-            ))
-            .map_err(search_error)?
-    };
+    if !palace_exists(&config.palace_path) {
+        return Ok(CliOutput::failure(
+            1,
+            format!(
+                "{}\n\n## L1 — No palace found. Run: mempalace-cli init <dir> then mempalace-cli mine <dir>\n",
+                default_identity_banner()
+            ),
+        ));
+    }
+
+    let runtime = Runtime::new().map_err(runtime_error)?;
+    let engine = runtime
+        .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
+        .map_err(storage_error)?;
+    let provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
+        .map_err(provider_error)?;
+    let search = SearchRuntime::new(provider);
+    let rendered = runtime
+        .block_on(search.wake_up(
+            engine.drawer_store(),
+            &WakeUpRequest {
+                wing: wing.as_deref().map(WingId::new).transpose().map_err(id_error)?,
+                ..WakeUpRequest::default()
+            },
+        ))
+        .map_err(search_error)?;
 
     let token_estimate = rendered.chars().count() / 4;
     Ok(CliOutput::success(format!(
@@ -787,19 +819,6 @@ fn detect_rooms(project_dir: &Path) -> std::io::Result<RoomDetection> {
             continue;
         }
         record_room(&mut discovered, &name);
-    }
-
-    for entry in fs::read_dir(project_dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-
-        let name = entry.file_name().to_string_lossy().to_string();
-        if SKIP_DIRS.contains(&name.as_str()) {
-            continue;
-        }
-
         for subentry in fs::read_dir(entry.path())? {
             let subentry = subentry?;
             if !subentry.file_type()?.is_dir() {
@@ -958,6 +977,13 @@ fn fastembed_provider(
 ) -> Result<FastembedProvider, Box<dyn std::error::Error>> {
     Ok(FastembedProvider::new(profile, FastembedProviderConfig::new(cache_root))
         .try_initialize()?)
+}
+
+fn fastembed_validation_provider(
+    profile: EmbeddingProfile,
+    cache_root: PathBuf,
+) -> Result<FastembedProvider, Box<dyn std::error::Error>> {
+    Ok(FastembedProvider::new(profile, FastembedProviderConfig::new(cache_root)))
 }
 
 fn config_error(error: mempalace_core::MempalaceError) -> clap::Error {
@@ -1165,15 +1191,14 @@ mod tests {
     }
 
     #[test]
-    fn init_creates_project_config_and_global_config() {
+    fn init_creates_project_config_and_global_config_without_yes_on_first_run() {
         let workspace = tempdir().unwrap();
         let project_dir = setup_project_fixture(workspace.path());
         let config_root = temp_config_root("init");
         let context = CliContext::for_tests(config_root.clone());
 
         let output =
-            run_cli(["init", project_dir.to_str().unwrap(), "--yes"], &context, stub_provider)
-                .unwrap();
+            run_cli(["init", project_dir.to_str().unwrap()], &context, stub_provider).unwrap();
 
         assert_eq!(output.exit_code, 0);
         assert!(output.stdout.contains("MemPalace Init"));
@@ -1184,7 +1209,7 @@ mod tests {
     }
 
     #[test]
-    fn init_requires_yes_and_preserves_existing_project_config() {
+    fn init_requires_yes_only_when_overwriting_existing_project_config() {
         let workspace = tempdir().unwrap();
         let project_dir = setup_project_fixture(workspace.path());
         let config_root = temp_config_root("init-yes");
@@ -1195,7 +1220,7 @@ mod tests {
         let output =
             run_cli(["init", project_dir.to_str().unwrap()], &context, stub_provider).unwrap();
         assert_eq!(output.exit_code, 1);
-        assert!(output.stderr.contains("Re-run with `--yes`"));
+        assert!(output.stderr.contains("with `--yes` to overwrite it"));
         assert_eq!(fs::read_to_string(project_dir.join("mempalace.yaml")).unwrap(), existing);
 
         remove_dir_all_if_exists(&config_root);
@@ -1304,6 +1329,26 @@ mod tests {
     }
 
     #[test]
+    fn mine_invalid_source_path_fails_before_creating_storage() {
+        let workspace = tempdir().unwrap();
+        let config_root = temp_config_root("invalid-source");
+        let context = CliContext::for_tests(config_root.clone());
+
+        let output = run_cli(
+            ["mine", workspace.path().join("missing-dir").to_str().unwrap()],
+            &context,
+            stub_provider,
+        )
+        .unwrap();
+        assert_eq!(output.exit_code, 2);
+        let layout = StorageLayout::new(config_root.join("palace"));
+        assert!(!layout.sqlite_path.exists());
+        assert!(!layout.lancedb_dir.exists());
+
+        remove_dir_all_if_exists(&config_root);
+    }
+
+    #[test]
     fn search_without_a_palace_exits_non_zero() {
         let config_root = temp_config_root("missing");
         fs::create_dir_all(&config_root).unwrap();
@@ -1324,6 +1369,19 @@ mod tests {
         let output = run_cli(["status"], &context, stub_provider).unwrap();
         assert_eq!(output.exit_code, 1);
         assert!(output.stderr.contains("No palace found"));
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn wake_up_without_a_palace_exits_non_zero() {
+        let config_root = temp_config_root("missing-wake-up");
+        fs::create_dir_all(&config_root).unwrap();
+        let context = CliContext::for_tests(config_root.clone());
+
+        let output = run_cli(["wake-up"], &context, stub_provider).unwrap();
+        assert_eq!(output.exit_code, 1);
+        assert!(output.stderr.contains("No palace found"));
+
         fs::remove_dir_all(config_root).unwrap();
     }
 
