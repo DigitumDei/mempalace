@@ -2129,6 +2129,7 @@ mod tests {
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2174,6 +2175,7 @@ mod tests {
                 extract_mode: ConversationExtractMode::Exchange,
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2190,6 +2192,7 @@ mod tests {
                 extract_mode: ConversationExtractMode::General,
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2243,6 +2246,7 @@ mod tests {
                 extract_mode: ConversationExtractMode::Exchange,
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2257,6 +2261,7 @@ mod tests {
                 extract_mode: ConversationExtractMode::Exchange,
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2277,6 +2282,7 @@ mod tests {
                 extract_mode: ConversationExtractMode::Exchange,
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2323,6 +2329,7 @@ mod tests {
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2336,6 +2343,7 @@ mod tests {
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2357,6 +2365,7 @@ mod tests {
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2403,6 +2412,7 @@ mod tests {
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2448,6 +2458,7 @@ mod tests {
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2464,6 +2475,7 @@ mod tests {
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2510,6 +2522,7 @@ mod tests {
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2529,6 +2542,7 @@ mod tests {
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await
@@ -2570,6 +2584,7 @@ mod tests {
                 extract_mode: ConversationExtractMode::Exchange,
                 limit: None,
                 dry_run: false,
+                max_embed_batch_size: None,
             },
         )
         .await

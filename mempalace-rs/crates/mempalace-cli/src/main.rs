@@ -1323,6 +1323,8 @@ mod tests {
 
         run_cli(["init", project_alpha.to_str().unwrap(), "--yes"], &context, stub_provider)
             .unwrap();
+        run_cli(["init", project_beta.to_str().unwrap(), "--yes"], &context, stub_provider)
+            .unwrap();
         run_cli(["mine", project_alpha.to_str().unwrap()], &context, stub_provider).unwrap();
         run_cli(["mine", project_beta.to_str().unwrap()], &context, stub_provider).unwrap();
 
