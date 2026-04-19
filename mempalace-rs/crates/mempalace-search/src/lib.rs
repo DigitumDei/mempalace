@@ -291,7 +291,11 @@ where
 }
 
 fn default_identity_path() -> Option<PathBuf> {
-    env::var_os("HOME").map(|home| PathBuf::from(home).join(".mempalace").join("identity.txt"))
+    default_identity_path_from_home(env::var_os("HOME").map(PathBuf::from))
+}
+
+fn default_identity_path_from_home(home: Option<PathBuf>) -> Option<PathBuf> {
+    home.map(|home| home.join(".mempalace").join("identity.txt"))
 }
 
 fn default_identity_banner() -> String {
@@ -537,9 +541,9 @@ struct RankedMatch {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        IdentitySource, Layer1Config, LayerRetrieveRequest, SearchError, SearchRuntime,
-        WakeUpFormat, WakeUpRequest, default_identity_path, generate_layer1, render_search_results,
-        trim_similarity,
+        Dialect, IdentitySource, Layer1Config, LayerRetrieveRequest, SearchError, SearchRuntime,
+        WakeUpFormat, WakeUpRequest, default_identity_path, default_identity_path_from_home,
+        generate_layer1, render_search_results, trim_similarity,
     };
     use async_trait::async_trait;
     use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
@@ -550,14 +554,11 @@ mod tests {
     use mempalace_storage::{
         DrawerFilter, DrawerMatch, DrawerStore, DuplicateStrategy, SearchRequest, StorageError,
     };
-    use std::ffi::OsString;
     use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
     use time::macros::{date, datetime};
-
-    static HOME_ENV_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn embedding(value: f32) -> Vec<f32> {
         vec![value; EmbeddingProfile::Balanced.metadata().dimensions]
@@ -822,44 +823,6 @@ mod tests {
     fn temp_test_dir(prefix: &str) -> PathBuf {
         let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         std::env::temp_dir().join(format!("mempalace-search-{prefix}-{unique}"))
-    }
-
-    struct HomeEnvGuard {
-        previous: Option<OsString>,
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    impl HomeEnvGuard {
-        fn set(path: &Path) -> Self {
-            let lock = HOME_ENV_MUTEX.lock().unwrap();
-            let previous = std::env::var_os("HOME");
-            unsafe {
-                std::env::set_var("HOME", path);
-            }
-            Self { previous, _lock: lock }
-        }
-
-        fn unset() -> Self {
-            let lock = HOME_ENV_MUTEX.lock().unwrap();
-            let previous = std::env::var_os("HOME");
-            unsafe {
-                std::env::remove_var("HOME");
-            }
-            Self { previous, _lock: lock }
-        }
-    }
-
-    impl Drop for HomeEnvGuard {
-        fn drop(&mut self) {
-            match self.previous.take() {
-                Some(value) => unsafe {
-                    std::env::set_var("HOME", value);
-                },
-                None => unsafe {
-                    std::env::remove_var("HOME");
-                },
-            }
-        }
     }
 
     #[tokio::test]
@@ -1605,31 +1568,38 @@ mod tests {
     }
 
     #[test]
-    fn wake_up_request_default_reads_home_identity_when_present() {
+    fn default_identity_path_joins_home_directory() {
         let dir = temp_test_dir("default-identity");
         let identity_dir = dir.join(".mempalace");
         fs::create_dir_all(&identity_dir).unwrap();
-        fs::write(
-            identity_dir.join("identity.txt"),
-            "## L0 — IDENTITY\nConfigured by home directory.\n",
-        )
-        .unwrap();
+        assert_eq!(
+            default_identity_path_from_home(Some(dir.clone())),
+            Some(identity_dir.join("identity.txt"))
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
-        let _home = HomeEnvGuard::set(&dir);
-        assert_eq!(default_identity_path(), Some(identity_dir.join("identity.txt")));
-        let rendered = WakeUpRequest::default().identity.render().unwrap();
+    #[test]
+    fn wake_up_request_default_path_reads_identity_file() {
+        let dir = temp_test_dir("default-identity-render");
+        let identity_dir = dir.join(".mempalace");
+        let identity_path = identity_dir.join("identity.txt");
+        fs::create_dir_all(&identity_dir).unwrap();
+        fs::write(&identity_path, "## L0 — IDENTITY\nConfigured by home directory.\n").unwrap();
+
+        let rendered = IdentitySource::DefaultPath(identity_path).render().unwrap();
 
         assert_eq!(rendered, "## L0 — IDENTITY\nConfigured by home directory.");
         fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn wake_up_request_default_falls_back_when_home_identity_is_missing() {
+    fn wake_up_request_default_path_falls_back_when_home_identity_is_missing() {
         let dir = temp_test_dir("default-missing");
+        let identity_path = dir.join(".mempalace").join("identity.txt");
         fs::create_dir_all(&dir).unwrap();
 
-        let _home = HomeEnvGuard::set(&dir);
-        let rendered = WakeUpRequest::default().identity.render().unwrap();
+        let rendered = IdentitySource::DefaultPath(identity_path).render().unwrap();
 
         assert_eq!(
             rendered,
@@ -1639,12 +1609,22 @@ mod tests {
     }
 
     #[test]
-    fn wake_up_request_default_uses_literal_tilde_path_when_home_is_unset() {
-        let _home = HomeEnvGuard::unset();
+    fn default_identity_path_returns_none_without_home() {
+        assert_eq!(default_identity_path_from_home(None), None);
+        assert!(matches!(
+            WakeUpRequest::default().identity,
+            IdentitySource::DefaultPath(_) | IdentitySource::MissingDefault
+        ));
+    }
 
-        assert_eq!(default_identity_path(), None);
+    #[test]
+    fn wake_up_request_missing_default_uses_literal_tilde_path_when_home_is_unset() {
         assert_eq!(
-            WakeUpRequest::default().identity.render().unwrap(),
+            default_identity_path(),
+            default_identity_path_from_home(std::env::var_os("HOME").map(PathBuf::from))
+        );
+        assert_eq!(
+            IdentitySource::MissingDefault.render().unwrap(),
             "## L0 — IDENTITY\nNo identity configured. Create ~/.mempalace/identity.txt"
         );
     }
