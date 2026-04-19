@@ -1334,13 +1334,14 @@ mod tests {
         let config_root = temp_config_root("invalid-source");
         let context = CliContext::for_tests(config_root.clone());
 
-        let output = run_cli(
+        let error = run_cli(
             ["mine", workspace.path().join("missing-dir").to_str().unwrap()],
             &context,
             stub_provider,
         )
-        .unwrap();
-        assert_eq!(output.exit_code, 2);
+        .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::Io);
+        assert!(error.to_string().contains("failed to access source directory"));
         let layout = StorageLayout::new(config_root.join("palace"));
         assert!(!layout.sqlite_path.exists());
         assert!(!layout.lancedb_dir.exists());
