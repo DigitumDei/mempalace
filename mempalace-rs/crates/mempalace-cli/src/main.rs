@@ -389,7 +389,7 @@ where
 
     let runtime_paths = init_runtime_config(palace_override, context).map_err(config_error)?;
     let config = load_runtime_config(palace_override, context).map_err(config_error)?;
-    let mut provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
+    let provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
         .map_err(provider_error)?;
     let validation = provider.startup_validation().map_err(provider_error)?;
     log_startup_validation(&validation);
@@ -449,7 +449,7 @@ where
     let engine = runtime
         .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
         .map_err(storage_error)?;
-    let provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
+    let mut provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
         .map_err(provider_error)?;
 
     let source_dir = dir.canonicalize().map_err(|source| {
