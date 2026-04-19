@@ -32,6 +32,7 @@ Make the Rust application feel like MemPalace by porting the CLI command surface
 - Decide whether `split` is in scope.
 - Decide whether `compress` is in scope.
 - If deferred, mark them explicitly rather than leaving silent gaps.
+- Decision record: [Phase09-Deferred-Commands.md](Phase09-Deferred-Commands.md)
 
 ## Deliverables
 
