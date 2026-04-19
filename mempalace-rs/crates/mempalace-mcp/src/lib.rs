@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use blake3::Hasher;
-use mempalace_config::{ConfigLoader, MempalaceConfig};
+use mempalace_config::{ConfigLoader, LowCpuRuntimeConfig, MempalaceConfig};
 use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
 use mempalace_embeddings::{
     EmbeddingError, EmbeddingProvider, EmbeddingRequest, FastembedProvider,
@@ -1416,6 +1416,7 @@ mod tests {
             collection_name: "mempalace_drawers".to_owned(),
             palace_path,
             embedding_profile: EmbeddingProfile::Balanced,
+            low_cpu: LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::Balanced),
         };
         let server = McpServer::from_parts(
             config,

@@ -325,6 +325,7 @@ pub struct ProjectIngestRequest {
     pub agent: String,
     pub limit: Option<usize>,
     pub dry_run: bool,
+    pub max_embed_batch_size: Option<usize>,
 }
 
 impl ProjectIngestRequest {
@@ -335,6 +336,7 @@ impl ProjectIngestRequest {
             agent: "mempalace-rs".to_owned(),
             limit: None,
             dry_run: false,
+            max_embed_batch_size: None,
         }
     }
 }
@@ -347,6 +349,7 @@ pub struct ConversationIngestRequest {
     pub extract_mode: ConversationExtractMode,
     pub limit: Option<usize>,
     pub dry_run: bool,
+    pub max_embed_batch_size: Option<usize>,
 }
 
 impl ConversationIngestRequest {
@@ -358,6 +361,7 @@ impl ConversationIngestRequest {
             extract_mode: ConversationExtractMode::Exchange,
             limit: None,
             dry_run: false,
+            max_embed_batch_size: None,
         }
     }
 }
@@ -504,6 +508,7 @@ pub async fn ingest_project<P: EmbeddingProvider>(
                     "projects",
                     None,
                     &request.agent,
+                    request.max_embed_batch_size,
                     chunks
                         .into_iter()
                         .map(|chunk| Chunk {
@@ -627,6 +632,7 @@ pub async fn ingest_conversations<P: EmbeddingProvider>(
             "convos",
             Some(request.extract_mode.as_str()),
             &request.agent,
+            request.max_embed_batch_size,
             chunks
                 .into_iter()
                 .map(|mut chunk| {
@@ -665,19 +671,17 @@ fn build_drawers<P: EmbeddingProvider>(
     ingest_mode: &str,
     extract_mode: Option<&str>,
     agent: &str,
+    max_embed_batch_size: Option<usize>,
     chunks: Vec<Chunk>,
 ) -> Result<Vec<DrawerRecord>> {
     if chunks.is_empty() {
         return Ok(Vec::new());
     }
 
-    let embedding_request = EmbeddingRequest::new(
-        chunks.iter().map(|chunk| chunk.content.clone()).collect::<Vec<_>>(),
-    )?;
-    let embeddings = provider.embed(&embedding_request)?;
+    let embeddings = embed_chunks(provider, &chunks, max_embed_batch_size)?;
 
     let mut drawers = Vec::with_capacity(chunks.len());
-    for (chunk, embedding) in chunks.into_iter().zip(embeddings.vectors().iter()) {
+    for (chunk, embedding) in chunks.into_iter().zip(embeddings.into_iter()) {
         let room_name = chunk.room_hint.unwrap_or_else(|| "general".to_owned());
         let room_id = room_id(&room_name)?;
         let drawer_id = drawer_id(wing, &room_id, source_key, chunk.chunk_index)?;
@@ -698,11 +702,30 @@ fn build_drawers<P: EmbeddingProvider>(
             weight: None,
             content_hash: hash_text(&chunk.content),
             content: chunk.content,
-            embedding: embedding.clone(),
+            embedding,
         });
     }
 
     Ok(drawers)
+}
+
+fn embed_chunks<P: EmbeddingProvider>(
+    provider: &mut P,
+    chunks: &[Chunk],
+    max_embed_batch_size: Option<usize>,
+) -> Result<Vec<Vec<f32>>> {
+    let batch_size = max_embed_batch_size.unwrap_or(chunks.len()).max(1);
+    let mut embeddings = Vec::with_capacity(chunks.len());
+
+    for batch in chunks.chunks(batch_size) {
+        let request = EmbeddingRequest::new(
+            batch.iter().map(|chunk| chunk.content.clone()).collect::<Vec<_>>(),
+        )?;
+        let response = provider.embed(&request)?;
+        embeddings.extend(response.vectors().iter().cloned());
+    }
+
+    Ok(embeddings)
 }
 
 async fn replace_source_drawers(
@@ -1826,7 +1849,9 @@ fn is_word_char(ch: char) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::cell::RefCell;
     use std::fs;
+    use std::rc::Rc;
 
     use mempalace_core::EmbeddingProfile;
     use mempalace_embeddings::{
@@ -1841,6 +1866,12 @@ mod tests {
     #[derive(Debug)]
     struct FakeEmbeddingProvider {
         dimensions: usize,
+    }
+
+    #[derive(Debug)]
+    struct RecordingEmbeddingProvider {
+        dimensions: usize,
+        batches: Rc<RefCell<Vec<usize>>>,
     }
 
     impl FakeEmbeddingProvider {
@@ -1887,8 +1918,100 @@ mod tests {
         }
     }
 
+    impl EmbeddingProvider for RecordingEmbeddingProvider {
+        fn profile(&self) -> &'static mempalace_core::EmbeddingProfileMetadata {
+            EmbeddingProfile::Balanced.metadata()
+        }
+
+        fn startup_validation(&self) -> mempalace_embeddings::Result<StartupValidation> {
+            Ok(StartupValidation {
+                status: StartupValidationStatus::Ready,
+                cache_root: PathBuf::from("/tmp/recording"),
+                model_id: self.profile().model_id,
+                detail: "ready".to_owned(),
+            })
+        }
+
+        fn embed(
+            &mut self,
+            request: &EmbeddingRequest,
+        ) -> mempalace_embeddings::Result<EmbeddingResponse> {
+            self.batches.borrow_mut().push(request.len());
+            let vectors = request
+                .texts()
+                .iter()
+                .map(|text| {
+                    let mut vector = vec![0.0; self.dimensions];
+                    if let Some(first) = vector.first_mut() {
+                        *first = text.len() as f32;
+                    }
+                    vector
+                })
+                .collect::<Vec<_>>();
+            EmbeddingResponse::from_vectors(
+                vectors,
+                self.dimensions,
+                EmbeddingProfile::Balanced,
+                self.profile().model_id,
+            )
+        }
+    }
+
     async fn open_engine(path: &Path) -> StorageEngine {
         StorageEngine::open(path, EmbeddingProfile::Balanced).await.unwrap()
+    }
+
+    #[test]
+    fn build_drawers_batches_embedding_requests_when_capped() {
+        let batches = Rc::new(RefCell::new(Vec::new()));
+        let mut provider = RecordingEmbeddingProvider { dimensions: 4, batches: batches.clone() };
+
+        let drawers = build_drawers(
+            &mut provider,
+            &WingId::new("wing_code").unwrap(),
+            "projects::wing_code::src/lib.rs",
+            "src/lib.rs",
+            "projects",
+            None,
+            "tests",
+            Some(2),
+            vec![
+                Chunk {
+                    content: "alpha".to_owned(),
+                    chunk_index: 0,
+                    room_hint: Some("general".to_owned()),
+                    date_hint: None,
+                },
+                Chunk {
+                    content: "beta".to_owned(),
+                    chunk_index: 1,
+                    room_hint: Some("general".to_owned()),
+                    date_hint: None,
+                },
+                Chunk {
+                    content: "gamma".to_owned(),
+                    chunk_index: 2,
+                    room_hint: Some("general".to_owned()),
+                    date_hint: None,
+                },
+                Chunk {
+                    content: "delta".to_owned(),
+                    chunk_index: 3,
+                    room_hint: Some("general".to_owned()),
+                    date_hint: None,
+                },
+                Chunk {
+                    content: "epsilon".to_owned(),
+                    chunk_index: 4,
+                    room_hint: Some("general".to_owned()),
+                    date_hint: None,
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(drawers.len(), 5);
+        assert_eq!(*batches.borrow(), vec![2, 2, 1]);
     }
 
     #[test]
