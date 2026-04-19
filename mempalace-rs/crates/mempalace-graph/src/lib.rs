@@ -1079,7 +1079,8 @@ where
                         source_closet: fact
                             .source_drawer_id
                             .as_ref()
-                            .map(|drawer_id| drawer_id.as_str().to_owned()),
+                            .map(|drawer_id| drawer_id.as_str().to_owned())
+                            .or_else(|| fact.source_file.clone()),
                         current: is_active_on(&fact, today),
                     });
                 }
@@ -1100,7 +1101,8 @@ where
                         source_closet: fact
                             .source_drawer_id
                             .as_ref()
-                            .map(|drawer_id| drawer_id.as_str().to_owned()),
+                            .map(|drawer_id| drawer_id.as_str().to_owned())
+                            .or_else(|| fact.source_file.clone()),
                         current: is_active_on(&fact, today),
                     });
                 }
@@ -1781,6 +1783,38 @@ mod tests {
         assert_eq!(timeline.len(), 2);
         assert_eq!(stats.current_facts, 1);
         assert_eq!(stats.expired_facts, 1);
+    }
+
+    #[test]
+    fn query_entity_preserves_string_provenance_without_drawer_id() {
+        let tempdir = tempdir().unwrap();
+        let store =
+            mempalace_storage::SqliteOperationalStore::new(tempdir.path().join("state.sqlite3"));
+        store.ensure_schema().unwrap();
+        let runtime = KnowledgeGraphRuntime::new(&store);
+
+        runtime
+            .add_fact(
+                AddFactRequest {
+                    subject: "Rust Rewrite".to_owned(),
+                    subject_type: EntityKind::Project,
+                    predicate: "documents".to_owned(),
+                    object: "Migration Plan".to_owned(),
+                    object_type: EntityKind::Concept,
+                    valid_from: Some(date!(2026 - 04 - 02)),
+                    valid_to: None,
+                    confidence: 1.0,
+                    source_drawer_id: None,
+                    source_file: Some("freeform source ref".to_owned()),
+                },
+                datetime!(2026-04-02 09:00:00 UTC),
+            )
+            .unwrap();
+
+        let query = runtime.query_entity("Rust Rewrite", None, QueryDirection::Outgoing).unwrap();
+
+        assert_eq!(query.len(), 1);
+        assert_eq!(query[0].source_closet.as_deref(), Some("freeform source ref"));
     }
 
     #[test]

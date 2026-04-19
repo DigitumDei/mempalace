@@ -826,6 +826,7 @@ where
             })
             .await
             .map_tool()?;
+        drawers.retain(|drawer| drawer.added_by == agent_name);
 
         let legacy_wing_name = legacy_diary_wing_name(&agent_name);
         if legacy_wing_name != diary_wing_name(&agent_name) {
@@ -934,7 +935,8 @@ where
         let valid_from_text = optional_string(arguments, "valid_from")?;
         let valid_from = valid_from_text.as_deref().map(parse_date).transpose()?;
         let source_closet = optional_string(arguments, "source_closet")?;
-        let source_drawer_id = source_closet.as_deref().map(parse_drawer_id).transpose()?;
+        let source_drawer_id =
+            source_closet.as_deref().and_then(|value| parse_drawer_id(value).ok());
         let runtime = KnowledgeGraphRuntime::new(self.storage.operational_store());
         let triple_id = runtime
             .add_fact(
@@ -2211,9 +2213,79 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kg_add_rejects_invalid_source_closet() {
+    async fn diary_read_filters_primary_wing_entries_by_agent_name() {
         let harness = test_harness().await;
-        let response = harness
+        let shared_wing = WingId::new(&diary_wing_name("Worker One")).unwrap();
+        assert_eq!(shared_wing.as_str(), diary_wing_name("Worker_One"));
+        let worker_one = DrawerRecord {
+            id: DrawerId::new("diary_worker_one_primary_0001").unwrap(),
+            wing: shared_wing.clone(),
+            room: RoomId::new(DIARY_ROOM).unwrap(),
+            hall: Some(DIARY_HALL.to_owned()),
+            date: Some(date!(2026 - 04 - 17)),
+            source_file: format!("{DIARY_TOPIC_PREFIX}ops"),
+            chunk_index: 0,
+            ingest_mode: "diary".to_owned(),
+            extract_mode: None,
+            added_by: "Worker One".to_owned(),
+            filed_at: datetime!(2026-04-17 12:00:00 UTC),
+            importance: None,
+            emotional_weight: None,
+            weight: None,
+            content: "SESSION:space-agent".to_owned(),
+            content_hash: hash_text("SESSION:space-agent"),
+            embedding: vec![0.0; EmbeddingProfile::Balanced.metadata().dimensions],
+        };
+        let worker_underscore = DrawerRecord {
+            id: DrawerId::new("diary_worker_one_primary_0002").unwrap(),
+            wing: shared_wing,
+            room: RoomId::new(DIARY_ROOM).unwrap(),
+            hall: Some(DIARY_HALL.to_owned()),
+            date: Some(date!(2026 - 04 - 17)),
+            source_file: format!("{DIARY_TOPIC_PREFIX}ops"),
+            chunk_index: 0,
+            ingest_mode: "diary".to_owned(),
+            extract_mode: None,
+            added_by: "Worker_One".to_owned(),
+            filed_at: datetime!(2026-04-17 13:00:00 UTC),
+            importance: None,
+            emotional_weight: None,
+            weight: None,
+            content: "SESSION:underscore-agent".to_owned(),
+            content_hash: hash_text("SESSION:underscore-agent"),
+            embedding: vec![0.0; EmbeddingProfile::Balanced.metadata().dimensions],
+        };
+
+        let runtime = harness.server.runtime.lock().await;
+        runtime
+            .storage
+            .drawer_store()
+            .put_drawers(&[worker_one, worker_underscore], DuplicateStrategy::Error)
+            .await
+            .unwrap();
+        drop(runtime);
+
+        let payload = decode_tool_payload(
+            &harness
+                .server
+                .handle_request(tool_call(
+                    299,
+                    "mempalace_diary_read",
+                    json!({"agent_name":"Worker One","last_n":10}),
+                ))
+                .await,
+        )
+        .unwrap();
+
+        let entries = payload["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["content"], "SESSION:space-agent");
+    }
+
+    #[tokio::test]
+    async fn kg_add_accepts_and_round_trips_freeform_source_closet() {
+        let harness = test_harness().await;
+        let add = harness
             .server
             .handle_request(tool_call(
                 300,
@@ -2226,6 +2298,22 @@ mod tests {
                 }),
             ))
             .await;
-        assert_eq!(response["error"]["code"], json!(-32602));
+        assert_eq!(decode_tool_payload(&add).unwrap()["success"], true);
+
+        let query = harness
+            .server
+            .handle_request(tool_call(
+                301,
+                "mempalace_kg_query",
+                json!({
+                    "entity":"Alice Smith",
+                    "direction":"outgoing"
+                }),
+            ))
+            .await;
+        let facts = decode_tool_payload(&query).unwrap()["facts"].as_array().unwrap().to_vec();
+
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0]["source_closet"], "freeform source ref");
     }
 }
