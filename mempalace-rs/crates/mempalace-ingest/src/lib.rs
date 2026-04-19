@@ -321,6 +321,7 @@ pub struct IngestSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectIngestRequest {
     pub project_dir: PathBuf,
+    pub wing: Option<String>,
     pub agent: String,
     pub limit: Option<usize>,
     pub dry_run: bool,
@@ -330,6 +331,7 @@ impl ProjectIngestRequest {
     pub fn new(project_dir: impl AsRef<Path>) -> Self {
         Self {
             project_dir: project_dir.as_ref().to_path_buf(),
+            wing: None,
             agent: "mempalace-rs".to_owned(),
             limit: None,
             dry_run: false,
@@ -429,7 +431,8 @@ pub async fn ingest_project<P: EmbeddingProvider>(
         .canonicalize()
         .map_err(|source| IngestError::Io { path: request.project_dir.clone(), source })?;
     let config = ConfigLoader::load_project_config(&root)?;
-    let wing_id = wing_id(&config.wing)?;
+    let wing_name = request.wing.clone().unwrap_or_else(|| config.wing.clone());
+    let wing_id = wing_id(&wing_name)?;
     let discovered = discover_project_files(&root)?;
     let routing_fingerprint = project_routing_fingerprint(&config.rooms);
 
@@ -443,7 +446,7 @@ pub async fn ingest_project<P: EmbeddingProvider>(
         match read_text_document(&file.absolute_path) {
             Ok(document) => {
                 let source_key =
-                    source_key("projects", &root, &config.wing, None, &file.relative_path);
+                    source_key("projects", &root, &wing_name, None, &file.relative_path);
                 let content_hash =
                     project_ingest_content_hash(&document.content_hash, &routing_fingerprint);
                 if let Some(existing) = engine.operational_store().get_ingested_file(&source_key)? {
@@ -1999,6 +2002,7 @@ mod tests {
             &mut provider,
             &ProjectIngestRequest {
                 project_dir: fixture_root.clone(),
+                wing: None,
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
@@ -2192,6 +2196,7 @@ mod tests {
             &mut provider,
             &ProjectIngestRequest {
                 project_dir: project_dir.clone(),
+                wing: None,
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
@@ -2204,6 +2209,7 @@ mod tests {
             &mut provider,
             &ProjectIngestRequest {
                 project_dir: project_dir.clone(),
+                wing: None,
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
@@ -2224,6 +2230,7 @@ mod tests {
             &mut provider,
             &ProjectIngestRequest {
                 project_dir: project_dir.clone(),
+                wing: None,
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
@@ -2242,6 +2249,51 @@ mod tests {
             .unwrap();
         assert_eq!(drawers.len(), 1);
         assert!(drawers[0].content.contains("changed auth"));
+    }
+
+    #[tokio::test]
+    async fn project_wing_override_routes_drawers_into_requested_wing() {
+        let tempdir = tempdir().unwrap();
+        let project_dir = tempdir.path().join("project");
+        fs::create_dir_all(project_dir.join("backend")).unwrap();
+        fs::write(
+            project_dir.join("mempalace.yaml"),
+            "wing: sample\nrooms:\n  - name: backend\n    keywords: [auth]\n  - name: general\n",
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("backend/auth.py"),
+            "def login():\n    return 'auth token'\n".repeat(40),
+        )
+        .unwrap();
+
+        let engine = open_engine(&tempdir.path().join("palace")).await;
+        let mut provider =
+            FakeEmbeddingProvider::new(EmbeddingProfile::Balanced.metadata().dimensions);
+
+        ingest_project(
+            &engine,
+            &mut provider,
+            &ProjectIngestRequest {
+                project_dir: project_dir.clone(),
+                wing: Some("overridewing".to_owned()),
+                agent: "tester".to_owned(),
+                limit: None,
+                dry_run: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let drawers = engine
+            .drawer_store()
+            .list_drawers(&DrawerFilter {
+                wing: Some(WingId::new("overridewing").unwrap()),
+                ..DrawerFilter::default()
+            })
+            .await
+            .unwrap();
+        assert!(!drawers.is_empty());
     }
 
     #[tokio::test]
@@ -2269,6 +2321,7 @@ mod tests {
             &mut provider,
             &ProjectIngestRequest {
                 project_dir: project_dir.clone(),
+                wing: None,
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
@@ -2284,6 +2337,7 @@ mod tests {
             &mut provider,
             &ProjectIngestRequest {
                 project_dir: project_dir.clone(),
+                wing: None,
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
@@ -2329,6 +2383,7 @@ mod tests {
             &mut provider,
             &ProjectIngestRequest {
                 project_dir: project_dir.clone(),
+                wing: None,
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,
@@ -2347,6 +2402,7 @@ mod tests {
             &mut provider,
             &ProjectIngestRequest {
                 project_dir: project_dir.clone(),
+                wing: None,
                 agent: "tester".to_owned(),
                 limit: None,
                 dry_run: false,

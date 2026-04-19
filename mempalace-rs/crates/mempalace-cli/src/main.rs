@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -186,7 +186,7 @@ enum Commands {
         mode: CliMode,
         #[arg(long)]
         wing: Option<String>,
-        #[arg(long, default_value = "mempalace-cli")]
+        #[arg(long, default_value = "mempalace")]
         agent: String,
         #[arg(long, default_value_t = 0)]
         limit: usize,
@@ -368,7 +368,7 @@ where
 
 fn execute_init<F, P>(
     dir: &Path,
-    _yes: bool,
+    yes: bool,
     palace_override: Option<&Path>,
     context: &CliContext,
     provider_factory: F,
@@ -377,6 +377,13 @@ where
     F: Fn(EmbeddingProfile, PathBuf) -> Result<P, Box<dyn std::error::Error>>,
     P: EmbeddingProvider,
 {
+    if !yes {
+        return Ok(CliOutput::failure(
+            1,
+            "Rust Phase 9 init is non-interactive. Re-run with `--yes` to accept the detected rooms.\n",
+        ));
+    }
+
     let project_dir = dir.canonicalize().map_err(|source| {
         clap::Error::raw(
             clap::error::ErrorKind::Io,
@@ -395,7 +402,7 @@ where
     log_startup_validation(&validation);
 
     let config_path = project_dir.join("mempalace.yaml");
-    write_project_config(&config_path, &project_dir, &detection.rooms).map_err(io_error)?;
+    write_project_config(&config_path, &project_dir, &detection.rooms, yes).map_err(io_error)?;
 
     let mut lines = vec![
         format!("\n{}", "=".repeat(INIT_HEADER_WIDTH)),
@@ -445,9 +452,14 @@ where
     P: EmbeddingProvider,
 {
     let config = load_runtime_config(palace_override, context).map_err(config_error)?;
+    let use_temp_storage = dry_run && !palace_exists(&config.palace_path);
     let runtime = Runtime::new().map_err(runtime_error)?;
+    let dry_run_storage =
+        if use_temp_storage { Some(tempfile::tempdir().map_err(io_error)?) } else { None };
+    let storage_root =
+        dry_run_storage.as_ref().map(|dir| dir.path()).unwrap_or(config.palace_path.as_path());
     let engine = runtime
-        .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
+        .block_on(StorageEngine::open(storage_root, config.embedding_profile))
         .map_err(storage_error)?;
     let mut provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
         .map_err(provider_error)?;
@@ -466,6 +478,7 @@ where
                 &mut provider,
                 &ProjectIngestRequest {
                     project_dir: source_dir.clone(),
+                    wing,
                     agent,
                     limit: if limit == 0 { None } else { Some(limit) },
                     dry_run,
@@ -550,7 +563,7 @@ fn execute_status(
 ) -> Result<CliOutput, clap::Error> {
     let config = load_runtime_config(palace_override, context).map_err(config_error)?;
     if !palace_exists(&config.palace_path) {
-        return Ok(CliOutput::success(no_palace_message(&config.palace_path)));
+        return Ok(no_palace_error(&config.palace_path));
     }
 
     let runtime = Runtime::new().map_err(runtime_error)?;
@@ -725,10 +738,8 @@ fn write_global_config_override(
     paths: &ResolvedPaths,
     palace_path: &Path,
 ) -> Result<(), mempalace_core::MempalaceError> {
-    let file = ConfigFileV1 {
-        palace_path: Some(palace_path.display().to_string()),
-        ..ConfigFileV1::default()
-    };
+    let mut file = read_global_config_file(&paths.config_file)?;
+    file.palace_path = Some(palace_path.display().to_string());
     let body = serde_json::to_string_pretty(&file).map_err(|source| {
         mempalace_core::MempalaceError::ConfigParse {
             path: paths.config_file.clone(),
@@ -740,6 +751,22 @@ fn write_global_config_override(
     })
 }
 
+fn read_global_config_file(
+    config_path: &Path,
+) -> Result<ConfigFileV1, mempalace_core::MempalaceError> {
+    if !config_path.exists() {
+        return Ok(ConfigFileV1::default());
+    }
+
+    let body = fs::read_to_string(config_path).map_err(|source| {
+        mempalace_core::MempalaceError::ConfigRead { path: config_path.to_path_buf(), source }
+    })?;
+    serde_json::from_str(&body).map_err(|source| mempalace_core::MempalaceError::ConfigParse {
+        path: config_path.to_path_buf(),
+        message: source.to_string(),
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RoomDetection {
     source: &'static str,
@@ -747,7 +774,7 @@ struct RoomDetection {
 }
 
 fn detect_rooms(project_dir: &Path) -> std::io::Result<RoomDetection> {
-    let mut discovered = BTreeMap::<String, String>::new();
+    let mut discovered = BTreeMap::<String, BTreeSet<String>>::new();
 
     for entry in fs::read_dir(project_dir)? {
         let entry = entry?;
@@ -794,11 +821,19 @@ fn detect_rooms(project_dir: &Path) -> std::io::Result<RoomDetection> {
             "folder structure",
             discovered
                 .into_iter()
-                .map(|(room, original)| {
+                .map(|(room, originals)| {
+                    let original_dirs = originals.into_iter().collect::<Vec<_>>();
+                    let description = if original_dirs.len() == 1 {
+                        format!("Files from {}/", original_dirs[0])
+                    } else {
+                        format!("Files from {}/", original_dirs.join(", "))
+                    };
+                    let mut keywords = vec![room.clone()];
+                    keywords.extend(original_dirs.iter().cloned());
                     project_room(
                         &room,
-                        &format!("Files from {original}/"),
-                        &[room.as_str(), original.as_str()],
+                        &description,
+                        &keywords.iter().map(String::as_str).collect::<Vec<_>>(),
                     )
                 })
                 .collect::<Vec<_>>(),
@@ -818,13 +853,13 @@ fn detect_rooms(project_dir: &Path) -> std::io::Result<RoomDetection> {
     Ok(RoomDetection { source, rooms: deduped })
 }
 
-fn record_room(discovered: &mut BTreeMap<String, String>, raw_name: &str) {
+fn record_room(discovered: &mut BTreeMap<String, BTreeSet<String>>, raw_name: &str) {
     let normalized = raw_name.to_lowercase().replace('-', "_").replace(' ', "_");
     let room_name = FOLDER_ROOM_MAP
         .iter()
         .find_map(|(key, room)| (*key == normalized).then_some((*room).to_owned()))
         .unwrap_or_else(|| normalized);
-    discovered.entry(room_name).or_insert_with(|| raw_name.to_owned());
+    discovered.entry(room_name).or_default().insert(raw_name.to_owned());
 }
 
 fn project_room(name: &str, description: &str, keywords: &[&str]) -> ProjectRoomConfig {
@@ -839,7 +874,19 @@ fn write_project_config(
     config_path: &Path,
     project_dir: &Path,
     rooms: &[ProjectRoomConfig],
+    overwrite: bool,
 ) -> std::io::Result<()> {
+    if config_path.exists() && !overwrite {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "{} already exists; re-run `mempalace-cli init {}` with `--yes` to overwrite it",
+                config_path.display(),
+                project_dir.display()
+            ),
+        ));
+    }
+
     let mut root = Mapping::new();
     root.insert(
         serde_yaml::Value::String("wing".to_owned()),
@@ -909,7 +956,8 @@ fn fastembed_provider(
     profile: EmbeddingProfile,
     cache_root: PathBuf,
 ) -> Result<FastembedProvider, Box<dyn std::error::Error>> {
-    Ok(FastembedProvider::new(profile, FastembedProviderConfig::new(cache_root)))
+    Ok(FastembedProvider::new(profile, FastembedProviderConfig::new(cache_root))
+        .try_initialize()?)
 }
 
 fn config_error(error: mempalace_core::MempalaceError) -> clap::Error {
@@ -953,10 +1001,11 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use mempalace_core::EmbeddingProfileMetadata;
     use mempalace_embeddings::{
         EmbeddingRequest, EmbeddingResponse, StartupValidation, StartupValidationStatus,
     };
-    use mempalace_core::EmbeddingProfileMetadata;
+    use mempalace_storage::StorageLayout;
     use tempfile::tempdir;
 
     #[derive(Debug, Clone)]
@@ -1054,6 +1103,28 @@ mod tests {
         project
     }
 
+    fn setup_second_project_fixture(root: &Path) -> PathBuf {
+        let project = root.join("project-beta");
+        write_file(
+            &project.join("planning/roadmap.md"),
+            "Roadmap ownership stays with the beta planning group.\n",
+        );
+        write_file(
+            &project.join("backend/payments.rs"),
+            "Payments ledger reconciliation runs in the beta backend.\n",
+        );
+        project
+    }
+
+    fn setup_convo_fixture(root: &Path) -> PathBuf {
+        let convos = root.join("convos");
+        write_file(
+            &convos.join("session.txt"),
+            "> What changed?\nWe fixed the auth migration.\n\n> Why?\nTo keep search results stable.\n",
+        );
+        convos
+    }
+
     #[test]
     fn help_lists_phase9_commands_and_deferred_entries() {
         let output = run_cli(["--help"], &CliContext::production(), stub_provider).unwrap();
@@ -1107,6 +1178,66 @@ mod tests {
     }
 
     #[test]
+    fn init_requires_yes_and_preserves_existing_project_config() {
+        let workspace = tempdir().unwrap();
+        let project_dir = setup_project_fixture(workspace.path());
+        let config_root = temp_config_root("init-yes");
+        let context = CliContext::for_tests(config_root.clone());
+        let existing = "wing: preserved\nrooms:\n  - name: archive\n    description: Keep me\n";
+        write_file(&project_dir.join("mempalace.yaml"), existing);
+
+        let output =
+            run_cli(["init", project_dir.to_str().unwrap()], &context, stub_provider).unwrap();
+        assert_eq!(output.exit_code, 1);
+        assert!(output.stderr.contains("Re-run with `--yes`"));
+        assert_eq!(fs::read_to_string(project_dir.join("mempalace.yaml")).unwrap(), existing);
+
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn init_with_palace_override_preserves_existing_global_config_fields() {
+        let workspace = tempdir().unwrap();
+        let project_dir = setup_project_fixture(workspace.path());
+        let config_root = temp_config_root("init-palace");
+        fs::create_dir_all(&config_root).unwrap();
+        let context = CliContext::for_tests(config_root.clone());
+        write_file(
+            &config_root.join("config.json"),
+            r#"{
+  "version": 1,
+  "palace_path": "/tmp/original-palace",
+  "collection_name": "custom_collection",
+  "embedding_profile": "low_cpu"
+}"#,
+        );
+        let override_palace = workspace.path().join("custom-palace");
+
+        let output = run_cli(
+            [
+                "--palace",
+                override_palace.to_str().unwrap(),
+                "init",
+                project_dir.to_str().unwrap(),
+                "--yes",
+            ],
+            &context,
+            stub_provider,
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code, 0);
+        let config: ConfigFileV1 =
+            serde_json::from_str(&fs::read_to_string(config_root.join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(config.collection_name, "custom_collection");
+        assert_eq!(config.embedding_profile, Some(EmbeddingProfile::LowCpu));
+        assert_eq!(config.palace_path, Some(override_palace.display().to_string()));
+
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
     fn mine_search_status_and_wakeup_work_end_to_end() {
         let workspace = tempdir().unwrap();
         let project_dir = setup_project_fixture(workspace.path());
@@ -1139,7 +1270,7 @@ mod tests {
     }
 
     #[test]
-    fn mine_dry_run_reports_work_without_writing_drawers() {
+    fn mine_dry_run_reports_work_without_writing_storage_files() {
         let workspace = tempdir().unwrap();
         let project_dir = setup_project_fixture(workspace.path());
         let config_root = temp_config_root("dry-run");
@@ -1158,7 +1289,11 @@ mod tests {
         assert!(output.stdout.contains("Files ingested: 1"));
 
         let status = run_cli(["status"], &context, stub_provider).unwrap();
-        assert!(status.stdout.contains("MemPalace Status — 0 drawers"));
+        assert_eq!(status.exit_code, 1);
+        assert!(status.stderr.contains("No palace found"));
+        let layout = StorageLayout::new(config_root.join("palace"));
+        assert!(!layout.sqlite_path.exists());
+        assert!(!layout.lancedb_dir.exists());
         fs::remove_dir_all(config_root).unwrap();
     }
 
@@ -1172,5 +1307,147 @@ mod tests {
         assert_eq!(output.exit_code, 1);
         assert!(output.stderr.contains("No palace found"));
         fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn status_without_a_palace_exits_non_zero() {
+        let config_root = temp_config_root("missing-status");
+        fs::create_dir_all(&config_root).unwrap();
+        let context = CliContext::for_tests(config_root.clone());
+
+        let output = run_cli(["status"], &context, stub_provider).unwrap();
+        assert_eq!(output.exit_code, 1);
+        assert!(output.stderr.contains("No palace found"));
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn mine_projects_respects_wing_override() {
+        let workspace = tempdir().unwrap();
+        let project_dir = setup_project_fixture(workspace.path());
+        let config_root = temp_config_root("wing-override");
+        let context = CliContext::for_tests(config_root.clone());
+
+        run_cli(["init", project_dir.to_str().unwrap(), "--yes"], &context, stub_provider).unwrap();
+        let output = run_cli(
+            ["mine", project_dir.to_str().unwrap(), "--wing", "overridewing"],
+            &context,
+            stub_provider,
+        )
+        .unwrap();
+        assert_eq!(output.exit_code, 0);
+
+        let status = run_cli(["status"], &context, stub_provider).unwrap();
+        assert!(status.stdout.contains("WING: overridewing"));
+        assert!(!status.stdout.contains("WING: project_alpha"));
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn mine_convos_mode_supports_real_and_dry_run_paths() {
+        let workspace = tempdir().unwrap();
+        let convo_dir = setup_convo_fixture(workspace.path());
+        let config_root = temp_config_root("convos");
+        let context = CliContext::for_tests(config_root.clone());
+
+        let mine = run_cli(
+            [
+                "--palace",
+                workspace.path().join("convo-palace").to_str().unwrap(),
+                "mine",
+                convo_dir.to_str().unwrap(),
+                "--mode",
+                "convos",
+                "--wing",
+                "talks",
+            ],
+            &context,
+            stub_provider,
+        )
+        .unwrap();
+        assert_eq!(mine.exit_code, 0);
+        assert!(mine.stdout.contains("Mode: convos"));
+
+        let dry_run = run_cli(
+            [
+                "--palace",
+                workspace.path().join("dry-convo-palace").to_str().unwrap(),
+                "mine",
+                convo_dir.to_str().unwrap(),
+                "--mode",
+                "convos",
+                "--wing",
+                "talks",
+                "--dry-run",
+            ],
+            &context,
+            stub_provider,
+        )
+        .unwrap();
+        assert_eq!(dry_run.exit_code, 0);
+        assert!(dry_run.stdout.contains("Dry run: yes"));
+
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn search_filters_and_wake_up_wing_flag_work_through_cli() {
+        let workspace = tempdir().unwrap();
+        let project_alpha = setup_project_fixture(workspace.path());
+        let project_beta = setup_second_project_fixture(workspace.path());
+        let config_root = temp_config_root("filters");
+        let context = CliContext::for_tests(config_root.clone());
+
+        run_cli(["init", project_alpha.to_str().unwrap(), "--yes"], &context, stub_provider)
+            .unwrap();
+        run_cli(["mine", project_alpha.to_str().unwrap()], &context, stub_provider).unwrap();
+        run_cli(["init", project_beta.to_str().unwrap(), "--yes"], &context, stub_provider)
+            .unwrap();
+        run_cli(["mine", project_beta.to_str().unwrap()], &context, stub_provider).unwrap();
+
+        let wing_search = run_cli(
+            ["search", "reconciliation", "--wing", "project_beta"],
+            &context,
+            stub_provider,
+        )
+        .unwrap();
+        assert_eq!(wing_search.exit_code, 0);
+        assert!(wing_search.stdout.contains("project_beta"));
+        assert!(!wing_search.stdout.contains("project_alpha"));
+
+        let room_search =
+            run_cli(["search", "roadmap", "--room", "planning"], &context, stub_provider).unwrap();
+        assert_eq!(room_search.exit_code, 0);
+        assert!(room_search.stdout.contains("planning"));
+
+        let wake_up =
+            run_cli(["wake-up", "--wing", "project_beta"], &context, stub_provider).unwrap();
+        assert_eq!(wake_up.exit_code, 0);
+        assert!(wake_up.stdout.contains("project_beta"));
+        assert!(!wake_up.stdout.contains("project_alpha"));
+
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn detect_rooms_keeps_all_directory_aliases_for_same_room() {
+        let workspace = tempdir().unwrap();
+        fs::create_dir_all(workspace.path().join("frontend")).unwrap();
+        fs::create_dir_all(workspace.path().join("client")).unwrap();
+
+        let detection = detect_rooms(workspace.path()).unwrap();
+        let frontend = detection.rooms.iter().find(|room| room.name == "frontend").unwrap();
+        assert!(frontend.description.as_ref().unwrap().contains("frontend"));
+        assert!(frontend.description.as_ref().unwrap().contains("client"));
+        assert!(frontend.keywords.contains(&"frontend".to_owned()));
+        assert!(frontend.keywords.contains(&"client".to_owned()));
+    }
+
+    #[test]
+    fn fastembed_provider_initializes_or_fails_during_factory_creation() {
+        let cache_root = tempdir().unwrap();
+        let result =
+            fastembed_provider(EmbeddingProfile::Balanced, cache_root.path().to_path_buf());
+        assert!(result.is_err());
     }
 }
