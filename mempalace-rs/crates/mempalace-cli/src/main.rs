@@ -1082,6 +1082,12 @@ mod tests {
         std::env::temp_dir().join(format!("mempalace-cli-{prefix}-{nanos}"))
     }
 
+    fn remove_dir_all_if_exists(path: &Path) {
+        if path.exists() {
+            fs::remove_dir_all(path).unwrap();
+        }
+    }
+
     fn write_file(path: &Path, body: &str) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create parent directories");
@@ -1192,7 +1198,7 @@ mod tests {
         assert!(output.stderr.contains("Re-run with `--yes`"));
         assert_eq!(fs::read_to_string(project_dir.join("mempalace.yaml")).unwrap(), existing);
 
-        fs::remove_dir_all(config_root).unwrap();
+        remove_dir_all_if_exists(&config_root);
     }
 
     #[test]
@@ -1387,7 +1393,7 @@ mod tests {
         assert_eq!(dry_run.exit_code, 0);
         assert!(dry_run.stdout.contains("Dry run: yes"));
 
-        fs::remove_dir_all(config_root).unwrap();
+        remove_dir_all_if_exists(&config_root);
     }
 
     #[test]
@@ -1423,8 +1429,9 @@ mod tests {
         let wake_up =
             run_cli(["wake-up", "--wing", "project_beta"], &context, stub_provider).unwrap();
         assert_eq!(wake_up.exit_code, 0);
-        assert!(wake_up.stdout.contains("project_beta"));
-        assert!(!wake_up.stdout.contains("project_alpha"));
+        assert!(wake_up.stdout.contains("[planning]"));
+        assert!(wake_up.stdout.contains("roadmap.md"));
+        assert!(!wake_up.stdout.contains("auth.rs"));
 
         fs::remove_dir_all(config_root).unwrap();
     }
