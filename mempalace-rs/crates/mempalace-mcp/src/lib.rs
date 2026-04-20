@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use blake3::Hasher;
-use mempalace_config::{ConfigLoader, MempalaceConfig};
+use mempalace_config::{ConfigLoader, LowCpuRuntimeConfig, MempalaceConfig};
 use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
 use mempalace_embeddings::{
     EmbeddingError, EmbeddingProvider, EmbeddingRequest, FastembedProvider,
