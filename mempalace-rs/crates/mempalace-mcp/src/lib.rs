@@ -453,7 +453,11 @@ pub fn default_provider(profile: EmbeddingProfile) -> Result<FastembedProvider> 
         .unwrap_or_else(|| PathBuf::from(".cache"))
         .join("mempalace")
         .join("embeddings");
-    FastembedProvider::new(profile, FastembedProviderConfig::new(cache_root)).try_initialize()
+    Ok(FastembedProvider::new(
+        profile,
+        FastembedProviderConfig::new(cache_root),
+    )
+    .try_initialize()?)
 }
 
 impl<P> McpServer<P>
