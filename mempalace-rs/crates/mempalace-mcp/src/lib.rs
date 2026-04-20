@@ -443,17 +443,17 @@ pub struct McpServer<P> {
 impl McpServer<FastembedProvider> {
     pub async fn from_default_config(base_dir_override: Option<&Path>) -> Result<Self> {
         let config = ConfigLoader::load_with_env(base_dir_override)?;
-        let cache_root = dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from(".cache"))
-            .join("mempalace")
-            .join("embeddings");
-        let provider = FastembedProvider::new(
-            config.embedding_profile,
-            FastembedProviderConfig::new(cache_root),
-        )
-        .try_initialize()?;
+        let provider = default_provider(config.embedding_profile)?;
         Self::from_parts(config, provider).await
     }
+}
+
+pub fn default_provider(profile: EmbeddingProfile) -> Result<FastembedProvider> {
+    let cache_root = dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from(".cache"))
+        .join("mempalace")
+        .join("embeddings");
+    FastembedProvider::new(profile, FastembedProviderConfig::new(cache_root)).try_initialize()
 }
 
 impl<P> McpServer<P>

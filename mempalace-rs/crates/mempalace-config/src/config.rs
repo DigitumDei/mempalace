@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use mempalace_core::{EmbeddingProfile, MempalaceError, Result};
 use serde::{Deserialize, Serialize};
+use tokio::runtime::{Builder, Runtime};
 
 pub const DEFAULT_BASE_DIR: &str = "~/.mempalace";
 pub const DEFAULT_COLLECTION_NAME: &str = "mempalace_drawers";
@@ -90,21 +91,38 @@ impl LowCpuRuntimeConfig {
         }
     }
 
-    fn with_overrides(mut self, overrides: Option<LowCpuConfigFileV1>) -> Self {
+    fn with_overrides(
+        mut self,
+        overrides: Option<LowCpuConfigFileV1>,
+        config_path: &Path,
+    ) -> Result<Self> {
         let Some(overrides) = overrides else {
-            return self;
+            return Ok(self);
         };
 
-        self.worker_threads = positive_override(overrides.worker_threads, self.worker_threads);
-        self.max_blocking_threads =
-            positive_override(overrides.max_blocking_threads, self.max_blocking_threads);
-        self.queue_limit = positive_override(overrides.queue_limit, self.queue_limit);
-        self.ingest_batch_size =
-            positive_override(overrides.ingest_batch_size, self.ingest_batch_size);
+        self.worker_threads = required_positive_override(
+            "low_cpu.worker_threads",
+            overrides.worker_threads,
+            self.worker_threads,
+            config_path,
+        )?;
+        self.max_blocking_threads = required_positive_override(
+            "low_cpu.max_blocking_threads",
+            overrides.max_blocking_threads,
+            self.max_blocking_threads,
+            config_path,
+        )?;
+        self.queue_limit = optional_limit_override(overrides.queue_limit, self.queue_limit);
+        self.ingest_batch_size = required_positive_override(
+            "low_cpu.ingest_batch_size",
+            overrides.ingest_batch_size,
+            self.ingest_batch_size,
+            config_path,
+        )?;
         self.search_results_limit =
-            positive_override(overrides.search_results_limit, self.search_results_limit);
+            optional_limit_override(overrides.search_results_limit, self.search_results_limit);
         self.wake_up_drawers_limit =
-            positive_override(overrides.wake_up_drawers_limit, self.wake_up_drawers_limit);
+            optional_limit_override(overrides.wake_up_drawers_limit, self.wake_up_drawers_limit);
         if let Some(degraded_mode) = overrides.degraded_mode {
             self.degraded_mode = degraded_mode;
         }
@@ -112,7 +130,7 @@ impl LowCpuRuntimeConfig {
             self.rerank_enabled = rerank_enabled;
         }
 
-        self
+        Ok(self)
     }
 
     pub fn effective_queue_limit(&self) -> usize {
@@ -250,7 +268,7 @@ impl ConfigLoader {
             palace_path: expand_path(&palace_path)?,
             embedding_profile,
             low_cpu: LowCpuRuntimeConfig::defaults_for_profile(embedding_profile)
-                .with_overrides(file.low_cpu),
+                .with_overrides(file.low_cpu, &paths.config_file)?,
         })
     }
 
@@ -340,8 +358,36 @@ fn resolve_profile(
     Ok(file_profile.unwrap_or_default())
 }
 
-fn positive_override(value: Option<usize>, default: usize) -> usize {
-    value.filter(|value| *value > 0).unwrap_or(default)
+fn required_positive_override(
+    field_name: &str,
+    value: Option<usize>,
+    default: usize,
+    config_path: &Path,
+) -> Result<usize> {
+    match value {
+        Some(0) => Err(MempalaceError::ConfigParse {
+            path: config_path.to_path_buf(),
+            message: format!("{field_name} must be greater than 0"),
+        }),
+        Some(value) => Ok(value),
+        None => Ok(default),
+    }
+}
+
+fn optional_limit_override(value: Option<usize>, default: usize) -> usize {
+    value.unwrap_or(default)
+}
+
+pub fn build_runtime(config: &MempalaceConfig) -> std::io::Result<Runtime> {
+    if !config.low_cpu.enabled {
+        return Runtime::new();
+    }
+
+    Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(config.low_cpu.worker_threads)
+        .max_blocking_threads(config.low_cpu.max_blocking_threads)
+        .build()
 }
 
 fn default_collection_name() -> String {
@@ -487,22 +533,73 @@ mod tests {
     #[test]
     fn non_degraded_low_cpu_uses_explicit_overrides_for_effective_limits() {
         let config = LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::LowCpu)
-            .with_overrides(Some(LowCpuConfigFileV1 {
-                worker_threads: None,
-                max_blocking_threads: None,
-                queue_limit: Some(11),
-                ingest_batch_size: Some(6),
-                search_results_limit: Some(9),
-                wake_up_drawers_limit: Some(7),
-                degraded_mode: Some(false),
-                rerank_enabled: Some(true),
-            }));
+            .with_overrides(
+                Some(LowCpuConfigFileV1 {
+                    worker_threads: None,
+                    max_blocking_threads: None,
+                    queue_limit: Some(11),
+                    ingest_batch_size: Some(6),
+                    search_results_limit: Some(9),
+                    wake_up_drawers_limit: Some(7),
+                    degraded_mode: Some(false),
+                    rerank_enabled: Some(true),
+                }),
+                Path::new("config.json"),
+            )
+            .unwrap();
 
         assert_eq!(config.effective_queue_limit(), 11);
         assert_eq!(config.effective_ingest_batch_size(), 6);
         assert_eq!(config.effective_search_results_limit(), 9);
         assert_eq!(config.effective_wake_up_drawers_limit(), 7);
         assert!(config.effective_rerank_enabled());
+    }
+
+    #[test]
+    fn zero_limits_are_loaded_without_falling_back() {
+        let config = LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::LowCpu)
+            .with_overrides(
+                Some(LowCpuConfigFileV1 {
+                    worker_threads: None,
+                    max_blocking_threads: None,
+                    queue_limit: Some(0),
+                    ingest_batch_size: None,
+                    search_results_limit: Some(0),
+                    wake_up_drawers_limit: Some(0),
+                    degraded_mode: Some(false),
+                    rerank_enabled: None,
+                }),
+                Path::new("config.json"),
+            )
+            .unwrap();
+
+        assert_eq!(config.queue_limit, 0);
+        assert_eq!(config.search_results_limit, 0);
+        assert_eq!(config.wake_up_drawers_limit, 0);
+    }
+
+    #[test]
+    fn zero_thread_overrides_are_rejected_with_precise_errors() {
+        let error = LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::LowCpu)
+            .with_overrides(
+                Some(LowCpuConfigFileV1 {
+                    worker_threads: Some(0),
+                    max_blocking_threads: None,
+                    queue_limit: None,
+                    ingest_batch_size: None,
+                    search_results_limit: None,
+                    wake_up_drawers_limit: None,
+                    degraded_mode: None,
+                    rerank_enabled: None,
+                }),
+                Path::new("config.json"),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "failed to parse config at config.json: low_cpu.worker_threads must be greater than 0"
+        );
     }
 
     #[test]

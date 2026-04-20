@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use mempalace_config::{
-    ConfigFileV1, ConfigLoader, MempalaceConfig, ProjectRoomConfig, ResolvedPaths,
+    ConfigFileV1, ConfigLoader, MempalaceConfig, ProjectRoomConfig, ResolvedPaths, build_runtime,
 };
 use mempalace_core::{EmbeddingProfile, RoomId, SearchQuery, WingId};
 use mempalace_embeddings::{
@@ -20,7 +20,6 @@ use mempalace_ingest::{
 use mempalace_search::{Layer1Config, SearchRuntime, SearchRuntimePolicy, WakeUpRequest};
 use mempalace_storage::{DrawerFilter, DrawerStore, StorageEngine, StorageLayout};
 use serde_yaml::Mapping;
-use tokio::runtime::{Builder, Runtime};
 use tracing_subscriber::{EnvFilter, fmt};
 
 const DEFERRED_COMMAND_DOC: &str = "docs/rust-phase-plans/Phase09-Deferred-Commands.md";
@@ -982,29 +981,14 @@ fn default_embedding_cache_dir() -> PathBuf {
         .join("embeddings")
 }
 
-fn build_runtime(config: &MempalaceConfig) -> std::io::Result<Runtime> {
-    if !config.low_cpu.enabled {
-        return Runtime::new();
-    }
-
-    Builder::new_multi_thread()
-        .enable_all()
-        .worker_threads(config.low_cpu.worker_threads)
-        .max_blocking_threads(config.low_cpu.max_blocking_threads)
-        .build()
-}
-
 fn clamp_search_results(results: usize, config: &MempalaceConfig) -> usize {
     results.min(config.low_cpu.effective_search_results_limit())
 }
 
 fn wake_up_layer1_config(config: &MempalaceConfig) -> Layer1Config {
-    Layer1Config {
-        max_drawers: Layer1Config::default()
-            .max_drawers
-            .min(config.low_cpu.effective_wake_up_drawers_limit()),
-        ..Layer1Config::default()
-    }
+    let mut layer1 = Layer1Config::default();
+    layer1.max_drawers = layer1.max_drawers.min(config.low_cpu.effective_wake_up_drawers_limit());
+    layer1
 }
 
 fn default_identity_banner() -> &'static str {
