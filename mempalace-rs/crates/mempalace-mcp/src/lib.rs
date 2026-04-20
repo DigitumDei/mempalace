@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use blake3::Hasher;
-use mempalace_config::{ConfigLoader, MempalaceConfig};
+use mempalace_config::{ConfigLoader, LowCpuRuntimeConfig, MempalaceConfig};
 use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
 use mempalace_embeddings::{
     EmbeddingError, EmbeddingProvider, EmbeddingRequest, FastembedProvider,
@@ -16,7 +16,7 @@ use mempalace_graph::{
     AddFactRequest, EntityKind, KnowledgeGraphRuntime, PalaceGraphSnapshot, QueryDirection,
     derive_palace_graph_from_store, find_tunnels, traverse_graph,
 };
-use mempalace_search::SearchRuntime;
+use mempalace_search::{SearchRuntime, SearchRuntimePolicy};
 use mempalace_storage::{
     DrawerFilter, DrawerStore, DuplicateStrategy, IngestCommitRequest, StorageEngine,
 };
@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use time::{Date, OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore, TryAcquireError};
 
 pub use mempalace_core as core;
 
@@ -33,6 +33,7 @@ const SERVER_NAME: &str = "mempalace";
 const SERVER_VERSION: &str = "2.0.0";
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const DEFAULT_DUPLICATE_THRESHOLD: f32 = 0.9;
+const DUPLICATE_SEARCH_LIMIT: usize = 5;
 const DIARY_ROOM: &str = "diary";
 const DIARY_HALL: &str = "hall_diary";
 const DIARY_TOPIC_PREFIX: &str = "diary:";
@@ -436,22 +437,27 @@ where
 #[derive(Debug, Clone)]
 pub struct McpServer<P> {
     runtime: Arc<Mutex<McpRuntime<P>>>,
+    queue_limit: Arc<Semaphore>,
 }
 
 impl McpServer<FastembedProvider> {
     pub async fn from_default_config(base_dir_override: Option<&Path>) -> Result<Self> {
         let config = ConfigLoader::load_with_env(base_dir_override)?;
-        let cache_root = dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from(".cache"))
-            .join("mempalace")
-            .join("embeddings");
-        let provider = FastembedProvider::new(
-            config.embedding_profile,
-            FastembedProviderConfig::new(cache_root),
-        )
-        .try_initialize()?;
+        let provider = default_provider(config.embedding_profile)?;
         Self::from_parts(config, provider).await
     }
+}
+
+pub fn default_provider(profile: EmbeddingProfile) -> Result<FastembedProvider> {
+    let cache_root = dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from(".cache"))
+        .join("mempalace")
+        .join("embeddings");
+    Ok(FastembedProvider::new(
+        profile,
+        FastembedProviderConfig::new(cache_root),
+    )
+    .try_initialize()?)
 }
 
 impl<P> McpServer<P>
@@ -459,8 +465,12 @@ where
     P: EmbeddingProvider + Send,
 {
     pub async fn from_parts(config: MempalaceConfig, provider: P) -> Result<Self> {
+        let queue_limit = config.low_cpu.effective_queue_limit().min(Semaphore::MAX_PERMITS);
         let runtime = McpRuntime::new(config, provider).await?;
-        Ok(Self { runtime: Arc::new(Mutex::new(runtime)) })
+        Ok(Self {
+            runtime: Arc::new(Mutex::new(runtime)),
+            queue_limit: Arc::new(Semaphore::new(queue_limit)),
+        })
     }
 
     pub async fn handle_json_value(&self, request: Value) -> Value {
@@ -530,6 +540,24 @@ where
             );
         };
 
+        let _permit = match self.queue_limit.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(TryAcquireError::NoPermits) => {
+                return jsonrpc_error(
+                    call.id,
+                    ErrorCode::InternalError,
+                    "server busy: low_cpu queue limit exceeded".to_owned(),
+                );
+            }
+            Err(TryAcquireError::Closed) => {
+                return jsonrpc_error(
+                    call.id,
+                    ErrorCode::InternalError,
+                    "server unavailable".to_owned(),
+                );
+            }
+        };
+
         let mut runtime = self.runtime.lock().await;
         let result = match tool {
             ToolName::Status => runtime.tool_status().await,
@@ -582,7 +610,14 @@ where
 {
     async fn new(config: MempalaceConfig, provider: P) -> Result<Self> {
         let storage = StorageEngine::open(&config.palace_path, config.embedding_profile).await?;
-        Ok(Self { config, storage, search: SearchRuntime::new(provider) })
+        Ok(Self {
+            search: SearchRuntime::with_policy(
+                provider,
+                SearchRuntimePolicy { rerank_enabled: config.low_cpu.effective_rerank_enabled() },
+            ),
+            config,
+            storage,
+        })
     }
 
     async fn tool_status(&mut self) -> ToolResult<Value> {
@@ -648,7 +683,9 @@ where
 
     async fn tool_search(&mut self, arguments: &Value) -> ToolResult<Value> {
         let query = required_string(arguments, "query")?;
-        let limit = optional_usize(arguments, "limit")?.unwrap_or(5);
+        let limit = optional_usize(arguments, "limit")?
+            .unwrap_or(5)
+            .min(self.config.low_cpu.effective_search_results_limit());
         let wing =
             optional_string(arguments, "wing")?.map(|value| parse_wing_id(&value)).transpose()?;
         let room =
@@ -1010,14 +1047,17 @@ where
     }
 
     async fn find_duplicates(&mut self, content: &str, threshold: f32) -> ToolResult<Vec<Value>> {
+        // Duplicate prevention is a write-path correctness check, so keep a fixed semantic
+        // search window instead of applying low-CPU UX caps or rerank score blending.
         let query = SearchQuery {
             text: content.to_owned(),
             wing: None,
             room: None,
-            limit: 5,
+            limit: DUPLICATE_SEARCH_LIMIT,
             profile: self.config.embedding_profile,
         };
-        let results = self.search.search(self.storage.drawer_store(), &query).await.map_tool()?;
+        let results =
+            self.search.search_semantic(self.storage.drawer_store(), &query).await.map_tool()?;
         Ok(results
             .into_iter()
             .filter(|result| result.score >= threshold)
@@ -1397,6 +1437,9 @@ fn fixture_root() -> PathBuf {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::mpsc;
 
     use tempfile::TempDir;
     use time::macros::{date, datetime};
@@ -1409,23 +1452,70 @@ mod tests {
     }
 
     async fn test_harness() -> TestHarness {
+        test_harness_with_config(
+            LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::Balanced),
+            EmbeddingProfile::Balanced,
+        )
+        .await
+    }
+
+    async fn test_harness_with_config(
+        low_cpu: LowCpuRuntimeConfig,
+        embedding_profile: EmbeddingProfile,
+    ) -> TestHarness {
         let tempdir = TempDir::new().unwrap();
         let palace_path = tempdir.path().join("palace");
         let config = MempalaceConfig {
             schema_version: 1,
             collection_name: "mempalace_drawers".to_owned(),
             palace_path,
-            embedding_profile: EmbeddingProfile::Balanced,
+            embedding_profile,
+            low_cpu,
         };
-        let server = McpServer::from_parts(
-            config,
-            DeterministicStubProvider::new(EmbeddingProfile::Balanced),
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::from_parts(config, DeterministicStubProvider::new(embedding_profile))
+                .await
+                .unwrap();
         seed_drawers(&server).await;
         seed_knowledge_graph(&server).await;
         TestHarness { _tempdir: tempdir, server }
+    }
+
+    #[derive(Debug, Clone)]
+    struct BlockingProvider {
+        started_tx: Arc<std::sync::Mutex<Option<mpsc::Sender<()>>>>,
+        release_rx: Arc<std::sync::Mutex<mpsc::Receiver<()>>>,
+    }
+
+    impl EmbeddingProvider for BlockingProvider {
+        fn profile(&self) -> &'static mempalace_core::EmbeddingProfileMetadata {
+            EmbeddingProfile::Balanced.metadata()
+        }
+
+        fn startup_validation(&self) -> mempalace_embeddings::Result<StartupValidation> {
+            Ok(StartupValidation {
+                status: StartupValidationStatus::Ready,
+                cache_root: PathBuf::from("/tmp"),
+                model_id: EmbeddingProfile::Balanced.metadata().model_id,
+                detail: "blocking".to_owned(),
+            })
+        }
+
+        fn embed(
+            &mut self,
+            request: &EmbeddingRequest,
+        ) -> mempalace_embeddings::Result<mempalace_embeddings::EmbeddingResponse> {
+            if let Some(sender) = self.started_tx.lock().unwrap().take() {
+                let _ = sender.send(());
+            }
+            let _ = self.release_rx.lock().unwrap().recv();
+            mempalace_embeddings::EmbeddingResponse::from_vectors(
+                vec![vec![0.0; EmbeddingProfile::Balanced.metadata().dimensions]; request.len()],
+                EmbeddingProfile::Balanced.metadata().dimensions,
+                EmbeddingProfile::Balanced,
+                EmbeddingProfile::Balanced.metadata().model_id,
+            )
+        }
     }
 
     async fn seed_drawers(server: &McpServer<DeterministicStubProvider>) {
@@ -1568,6 +1658,162 @@ mod tests {
                 .iter()
                 .all(|result| result.get("similarity").is_some())
         );
+    }
+
+    #[tokio::test]
+    async fn search_tool_clamps_results_under_low_cpu_config() {
+        let harness = test_harness_with_config(
+            LowCpuRuntimeConfig {
+                enabled: true,
+                worker_threads: 1,
+                max_blocking_threads: 1,
+                queue_limit: 32,
+                ingest_batch_size: 8,
+                search_results_limit: 1,
+                wake_up_drawers_limit: 8,
+                degraded_mode: false,
+                rerank_enabled: false,
+            },
+            EmbeddingProfile::Balanced,
+        )
+        .await;
+        let response = harness
+            .server
+            .handle_request(tool_call(
+                41,
+                "mempalace_search",
+                json!({"query":"auth migration parity","limit":5}),
+            ))
+            .await;
+
+        let payload = decode_tool_payload(&response).unwrap();
+        assert_eq!(payload["results"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn duplicate_check_uses_semantic_scores_even_when_rerank_is_enabled() {
+        let harness = test_harness_with_config(
+            LowCpuRuntimeConfig {
+                enabled: true,
+                worker_threads: 1,
+                max_blocking_threads: 1,
+                queue_limit: 32,
+                ingest_batch_size: 8,
+                search_results_limit: 1,
+                wake_up_drawers_limit: 8,
+                degraded_mode: false,
+                rerank_enabled: true,
+            },
+            EmbeddingProfile::Balanced,
+        )
+        .await;
+        let content = "session ledger rewrite";
+        let embedding =
+            DeterministicStubProvider::new(EmbeddingProfile::Balanced).vector_for(content);
+        let runtime = harness.server.runtime.lock().await;
+        runtime
+            .storage
+            .drawer_store()
+            .put_drawers(
+                &[DrawerRecord {
+                    id: DrawerId::new("wing_code/session-ledger/0001").unwrap(),
+                    wing: WingId::new("wing_code").unwrap(),
+                    room: RoomId::new("session-ledger").unwrap(),
+                    hall: Some("hall_facts".to_owned()),
+                    date: Some(date!(2026 - 04 - 12)),
+                    source_file: "session-ledger.md".to_owned(),
+                    chunk_index: 0,
+                    ingest_mode: "fixtures".to_owned(),
+                    extract_mode: None,
+                    added_by: "tests".to_owned(),
+                    filed_at: datetime!(2026-04-12 09:00:00 UTC),
+                    importance: None,
+                    emotional_weight: None,
+                    weight: None,
+                    content: content.to_owned(),
+                    content_hash: hash_text(content),
+                    embedding,
+                }],
+                DuplicateStrategy::Error,
+            )
+            .await
+            .unwrap();
+        drop(runtime);
+
+        let duplicate = harness
+            .server
+            .handle_request(tool_call(
+                44,
+                "mempalace_check_duplicate",
+                json!({"content":"session diary ops","threshold":0.9}),
+            ))
+            .await;
+
+        let payload = decode_tool_payload(&duplicate).unwrap();
+        assert_eq!(payload["is_duplicate"], true);
+        assert_eq!(payload["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["matches"][0]["content"], "session ledger rewrite");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queue_limit_rejects_excess_concurrent_requests() {
+        let tempdir = TempDir::new().unwrap();
+        let palace_path = tempdir.path().join("palace");
+        let config = MempalaceConfig {
+            schema_version: 1,
+            collection_name: "mempalace_drawers".to_owned(),
+            palace_path,
+            embedding_profile: EmbeddingProfile::Balanced,
+            low_cpu: LowCpuRuntimeConfig {
+                enabled: true,
+                worker_threads: 1,
+                max_blocking_threads: 1,
+                queue_limit: 1,
+                ingest_batch_size: 8,
+                search_results_limit: 5,
+                wake_up_drawers_limit: 8,
+                degraded_mode: false,
+                rerank_enabled: false,
+            },
+        };
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = McpServer::from_parts(
+            config,
+            BlockingProvider {
+                started_tx: Arc::new(std::sync::Mutex::new(Some(started_tx))),
+                release_rx: Arc::new(std::sync::Mutex::new(release_rx)),
+            },
+        )
+        .await
+        .unwrap();
+
+        let first_server = server.clone();
+        let first = tokio::spawn(async move {
+            first_server
+                .handle_request(tool_call(
+                    42,
+                    "mempalace_search",
+                    json!({"query":"auth migration parity","limit":1}),
+                ))
+                .await
+        });
+        started_rx.recv().unwrap();
+
+        let second = server
+            .handle_request(tool_call(
+                43,
+                "mempalace_search",
+                json!({"query":"auth migration parity","limit":1}),
+            ))
+            .await;
+
+        assert_eq!(second["error"]["code"], json!(-32000));
+        assert_eq!(second["error"]["message"], "server busy: low_cpu queue limit exceeded");
+
+        release_tx.send(()).unwrap();
+        let first = first.await.unwrap();
+        assert!(first.get("result").is_some());
     }
 
     #[tokio::test]

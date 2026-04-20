@@ -4,12 +4,23 @@ use std::path::{Path, PathBuf};
 
 use mempalace_core::{EmbeddingProfile, MempalaceError, Result};
 use serde::{Deserialize, Serialize};
+use tokio::runtime::{Builder, Runtime};
 
 pub const DEFAULT_BASE_DIR: &str = "~/.mempalace";
 pub const DEFAULT_COLLECTION_NAME: &str = "mempalace_drawers";
 const CONFIG_FILE_NAME: &str = "config.json";
 const PROJECT_CONFIG_FILE_NAME: &str = "mempalace.yaml";
 const LEGACY_PROJECT_CONFIG_FILE_NAME: &str = "mempal.yaml";
+const DEFAULT_LOW_CPU_WORKER_THREADS: usize = 1;
+const DEFAULT_LOW_CPU_MAX_BLOCKING_THREADS: usize = 1;
+const DEFAULT_LOW_CPU_QUEUE_LIMIT: usize = 32;
+const DEFAULT_LOW_CPU_INGEST_BATCH_SIZE: usize = 8;
+const DEFAULT_LOW_CPU_SEARCH_RESULTS_LIMIT: usize = 5;
+const DEFAULT_LOW_CPU_WAKE_UP_DRAWERS_LIMIT: usize = 8;
+const DEGRADED_LOW_CPU_QUEUE_LIMIT: usize = 8;
+const DEGRADED_LOW_CPU_INGEST_BATCH_SIZE: usize = 4;
+const DEGRADED_LOW_CPU_SEARCH_RESULTS_LIMIT: usize = 3;
+const DEGRADED_LOW_CPU_WAKE_UP_DRAWERS_LIMIT: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedPaths {
@@ -17,6 +28,162 @@ pub struct ResolvedPaths {
     pub palace_dir: PathBuf,
     pub config_file: PathBuf,
     pub people_map_file: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LowCpuConfigFileV1 {
+    #[serde(default)]
+    pub worker_threads: Option<usize>,
+    #[serde(default)]
+    pub max_blocking_threads: Option<usize>,
+    #[serde(default)]
+    pub queue_limit: Option<usize>,
+    #[serde(default)]
+    pub ingest_batch_size: Option<usize>,
+    #[serde(default)]
+    pub search_results_limit: Option<usize>,
+    #[serde(default)]
+    pub wake_up_drawers_limit: Option<usize>,
+    #[serde(default)]
+    pub degraded_mode: Option<bool>,
+    #[serde(default)]
+    pub rerank_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LowCpuRuntimeConfig {
+    pub enabled: bool,
+    pub worker_threads: usize,
+    pub max_blocking_threads: usize,
+    pub queue_limit: usize,
+    pub ingest_batch_size: usize,
+    pub search_results_limit: usize,
+    pub wake_up_drawers_limit: usize,
+    pub degraded_mode: bool,
+    pub rerank_enabled: bool,
+}
+
+impl LowCpuRuntimeConfig {
+    pub fn defaults_for_profile(profile: EmbeddingProfile) -> Self {
+        match profile {
+            EmbeddingProfile::Balanced => Self {
+                enabled: false,
+                worker_threads: DEFAULT_LOW_CPU_WORKER_THREADS,
+                max_blocking_threads: DEFAULT_LOW_CPU_MAX_BLOCKING_THREADS,
+                queue_limit: usize::MAX,
+                ingest_batch_size: usize::MAX,
+                search_results_limit: usize::MAX,
+                wake_up_drawers_limit: usize::MAX,
+                degraded_mode: false,
+                rerank_enabled: false,
+            },
+            EmbeddingProfile::LowCpu => Self {
+                enabled: true,
+                worker_threads: DEFAULT_LOW_CPU_WORKER_THREADS,
+                max_blocking_threads: DEFAULT_LOW_CPU_MAX_BLOCKING_THREADS,
+                queue_limit: DEFAULT_LOW_CPU_QUEUE_LIMIT,
+                ingest_batch_size: DEFAULT_LOW_CPU_INGEST_BATCH_SIZE,
+                search_results_limit: DEFAULT_LOW_CPU_SEARCH_RESULTS_LIMIT,
+                wake_up_drawers_limit: DEFAULT_LOW_CPU_WAKE_UP_DRAWERS_LIMIT,
+                degraded_mode: true,
+                rerank_enabled: false,
+            },
+        }
+    }
+
+    fn with_overrides(
+        mut self,
+        overrides: Option<LowCpuConfigFileV1>,
+        config_path: &Path,
+    ) -> Result<Self> {
+        let Some(overrides) = overrides else {
+            return Ok(self);
+        };
+
+        self.worker_threads = required_positive_override(
+            "low_cpu.worker_threads",
+            overrides.worker_threads,
+            self.worker_threads,
+            config_path,
+        )?;
+        self.max_blocking_threads = required_positive_override(
+            "low_cpu.max_blocking_threads",
+            overrides.max_blocking_threads,
+            self.max_blocking_threads,
+            config_path,
+        )?;
+        self.queue_limit = optional_limit_override(overrides.queue_limit, self.queue_limit);
+        self.ingest_batch_size = required_positive_override(
+            "low_cpu.ingest_batch_size",
+            overrides.ingest_batch_size,
+            self.ingest_batch_size,
+            config_path,
+        )?;
+        self.search_results_limit =
+            optional_limit_override(overrides.search_results_limit, self.search_results_limit);
+        self.wake_up_drawers_limit =
+            optional_limit_override(overrides.wake_up_drawers_limit, self.wake_up_drawers_limit);
+        if let Some(degraded_mode) = overrides.degraded_mode {
+            self.degraded_mode = degraded_mode;
+        }
+        if let Some(rerank_enabled) = overrides.rerank_enabled {
+            self.rerank_enabled = rerank_enabled;
+        }
+
+        Ok(self)
+    }
+
+    pub fn effective_queue_limit(&self) -> usize {
+        if !self.enabled {
+            return usize::MAX;
+        }
+
+        if self.degraded_mode {
+            self.queue_limit.min(DEGRADED_LOW_CPU_QUEUE_LIMIT)
+        } else {
+            self.queue_limit
+        }
+    }
+
+    pub fn effective_ingest_batch_size(&self) -> usize {
+        if !self.enabled {
+            return usize::MAX;
+        }
+
+        if self.degraded_mode {
+            self.ingest_batch_size.min(DEGRADED_LOW_CPU_INGEST_BATCH_SIZE)
+        } else {
+            self.ingest_batch_size
+        }
+    }
+
+    pub fn effective_search_results_limit(&self) -> usize {
+        if !self.enabled {
+            return usize::MAX;
+        }
+
+        if self.degraded_mode {
+            self.search_results_limit.min(DEGRADED_LOW_CPU_SEARCH_RESULTS_LIMIT)
+        } else {
+            self.search_results_limit
+        }
+    }
+
+    pub fn effective_wake_up_drawers_limit(&self) -> usize {
+        if !self.enabled {
+            return usize::MAX;
+        }
+
+        if self.degraded_mode {
+            self.wake_up_drawers_limit.min(DEGRADED_LOW_CPU_WAKE_UP_DRAWERS_LIMIT)
+        } else {
+            self.wake_up_drawers_limit
+        }
+    }
+
+    pub fn effective_rerank_enabled(&self) -> bool {
+        self.enabled && !self.degraded_mode && self.rerank_enabled
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +196,8 @@ pub struct ConfigFileV1 {
     pub collection_name: String,
     #[serde(default)]
     pub embedding_profile: Option<EmbeddingProfile>,
+    #[serde(default)]
+    pub low_cpu: Option<LowCpuConfigFileV1>,
 }
 
 impl Default for ConfigFileV1 {
@@ -38,6 +207,7 @@ impl Default for ConfigFileV1 {
             palace_path: Some(default_palace_path()),
             collection_name: default_collection_name(),
             embedding_profile: Some(EmbeddingProfile::Balanced),
+            low_cpu: None,
         }
     }
 }
@@ -48,6 +218,7 @@ pub struct MempalaceConfig {
     pub collection_name: String,
     pub palace_path: PathBuf,
     pub embedding_profile: EmbeddingProfile,
+    pub low_cpu: LowCpuRuntimeConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +256,7 @@ impl ConfigLoader {
     ) -> Result<MempalaceConfig> {
         let paths = resolve_paths(base_dir_override)?;
         let file = read_config_file(&paths.config_file)?;
+        let embedding_profile = resolve_profile(profile_override, file.embedding_profile)?;
 
         let palace_path = palace_path_override
             .or(file.palace_path)
@@ -94,7 +266,9 @@ impl ConfigLoader {
             schema_version: file.version,
             collection_name: file.collection_name,
             palace_path: expand_path(&palace_path)?,
-            embedding_profile: resolve_profile(profile_override, file.embedding_profile)?,
+            embedding_profile,
+            low_cpu: LowCpuRuntimeConfig::defaults_for_profile(embedding_profile)
+                .with_overrides(file.low_cpu, &paths.config_file)?,
         })
     }
 
@@ -184,6 +358,38 @@ fn resolve_profile(
     Ok(file_profile.unwrap_or_default())
 }
 
+fn required_positive_override(
+    field_name: &str,
+    value: Option<usize>,
+    default: usize,
+    config_path: &Path,
+) -> Result<usize> {
+    match value {
+        Some(0) => Err(MempalaceError::ConfigParse {
+            path: config_path.to_path_buf(),
+            message: format!("{field_name} must be greater than 0"),
+        }),
+        Some(value) => Ok(value),
+        None => Ok(default),
+    }
+}
+
+fn optional_limit_override(value: Option<usize>, default: usize) -> usize {
+    value.unwrap_or(default)
+}
+
+pub fn build_runtime(config: &MempalaceConfig) -> std::io::Result<Runtime> {
+    if !config.low_cpu.enabled {
+        return Runtime::new();
+    }
+
+    Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(config.low_cpu.worker_threads)
+        .max_blocking_threads(config.low_cpu.max_blocking_threads)
+        .build()
+}
+
 fn default_collection_name() -> String {
     DEFAULT_COLLECTION_NAME.to_owned()
 }
@@ -222,12 +428,15 @@ fn expand_path(value: &str) -> Result<PathBuf> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use mempalace_core::EmbeddingProfile;
 
-    use super::{ConfigLoader, DEFAULT_COLLECTION_NAME};
+    use super::{
+        ConfigLoader, DEFAULT_COLLECTION_NAME, DEFAULT_LOW_CPU_INGEST_BATCH_SIZE,
+        LowCpuConfigFileV1, LowCpuRuntimeConfig,
+    };
 
     fn temp_dir() -> PathBuf {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
@@ -245,6 +454,7 @@ mod tests {
         assert_eq!(config.collection_name, DEFAULT_COLLECTION_NAME);
         assert_eq!(config.embedding_profile, EmbeddingProfile::Balanced);
         assert_eq!(config.palace_path, base.join("palace"));
+        assert!(!config.low_cpu.enabled);
         assert!(paths.palace_dir.is_dir());
 
         fs::remove_dir_all(base).unwrap();
@@ -264,8 +474,132 @@ mod tests {
 
         assert_eq!(config.palace_path, PathBuf::from("/tmp/custom-palace"));
         assert_eq!(config.embedding_profile, EmbeddingProfile::LowCpu);
+        assert!(config.low_cpu.enabled);
+        assert_eq!(config.low_cpu.ingest_batch_size, DEFAULT_LOW_CPU_INGEST_BATCH_SIZE);
 
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn low_cpu_overrides_are_loaded_from_config() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        fs::write(
+            base.join("config.json"),
+            r#"{
+  "version": 1,
+  "collection_name": "mempalace_drawers",
+  "embedding_profile": "low_cpu",
+  "low_cpu": {
+    "worker_threads": 2,
+    "max_blocking_threads": 3,
+    "queue_limit": 7,
+    "ingest_batch_size": 4,
+    "search_results_limit": 2,
+    "wake_up_drawers_limit": 1,
+    "degraded_mode": false,
+    "rerank_enabled": true
+  }
+}"#,
+        )
+        .unwrap();
+
+        let config = ConfigLoader::load_with_env(Some(&base)).unwrap();
+
+        assert!(config.low_cpu.enabled);
+        assert_eq!(config.low_cpu.worker_threads, 2);
+        assert_eq!(config.low_cpu.max_blocking_threads, 3);
+        assert_eq!(config.low_cpu.queue_limit, 7);
+        assert_eq!(config.low_cpu.ingest_batch_size, 4);
+        assert_eq!(config.low_cpu.search_results_limit, 2);
+        assert_eq!(config.low_cpu.wake_up_drawers_limit, 1);
+        assert!(!config.low_cpu.degraded_mode);
+        assert!(config.low_cpu.rerank_enabled);
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn degraded_mode_tightens_effective_limits_and_disables_rerank() {
+        let config = LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::LowCpu);
+
+        assert_eq!(config.effective_queue_limit(), 8);
+        assert_eq!(config.effective_ingest_batch_size(), 4);
+        assert_eq!(config.effective_search_results_limit(), 3);
+        assert_eq!(config.effective_wake_up_drawers_limit(), 4);
+        assert!(!config.effective_rerank_enabled());
+    }
+
+    #[test]
+    fn non_degraded_low_cpu_uses_explicit_overrides_for_effective_limits() {
+        let config = LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::LowCpu)
+            .with_overrides(
+                Some(LowCpuConfigFileV1 {
+                    worker_threads: None,
+                    max_blocking_threads: None,
+                    queue_limit: Some(11),
+                    ingest_batch_size: Some(6),
+                    search_results_limit: Some(9),
+                    wake_up_drawers_limit: Some(7),
+                    degraded_mode: Some(false),
+                    rerank_enabled: Some(true),
+                }),
+                Path::new("config.json"),
+            )
+            .unwrap();
+
+        assert_eq!(config.effective_queue_limit(), 11);
+        assert_eq!(config.effective_ingest_batch_size(), 6);
+        assert_eq!(config.effective_search_results_limit(), 9);
+        assert_eq!(config.effective_wake_up_drawers_limit(), 7);
+        assert!(config.effective_rerank_enabled());
+    }
+
+    #[test]
+    fn zero_limits_are_loaded_without_falling_back() {
+        let config = LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::LowCpu)
+            .with_overrides(
+                Some(LowCpuConfigFileV1 {
+                    worker_threads: None,
+                    max_blocking_threads: None,
+                    queue_limit: Some(0),
+                    ingest_batch_size: None,
+                    search_results_limit: Some(0),
+                    wake_up_drawers_limit: Some(0),
+                    degraded_mode: Some(false),
+                    rerank_enabled: None,
+                }),
+                Path::new("config.json"),
+            )
+            .unwrap();
+
+        assert_eq!(config.queue_limit, 0);
+        assert_eq!(config.search_results_limit, 0);
+        assert_eq!(config.wake_up_drawers_limit, 0);
+    }
+
+    #[test]
+    fn zero_thread_overrides_are_rejected_with_precise_errors() {
+        let error = LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::LowCpu)
+            .with_overrides(
+                Some(LowCpuConfigFileV1 {
+                    worker_threads: Some(0),
+                    max_blocking_threads: None,
+                    queue_limit: None,
+                    ingest_batch_size: None,
+                    search_results_limit: None,
+                    wake_up_drawers_limit: None,
+                    degraded_mode: None,
+                    rerank_enabled: None,
+                }),
+                Path::new("config.json"),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "failed to parse config at config.json: low_cpu.worker_threads must be greater than 0"
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use mempalace_config::{
-    ConfigFileV1, ConfigLoader, MempalaceConfig, ProjectRoomConfig, ResolvedPaths,
+    ConfigFileV1, ConfigLoader, MempalaceConfig, ProjectRoomConfig, ResolvedPaths, build_runtime,
 };
 use mempalace_core::{EmbeddingProfile, RoomId, SearchQuery, WingId};
 use mempalace_embeddings::{
@@ -17,10 +17,9 @@ use mempalace_ingest::{
     ConversationExtractMode, ConversationIngestRequest, IngestSummary, ProjectIngestRequest,
     ingest_conversations, ingest_project,
 };
-use mempalace_search::{SearchRuntime, WakeUpRequest};
+use mempalace_search::{Layer1Config, SearchRuntime, SearchRuntimePolicy, WakeUpRequest};
 use mempalace_storage::{DrawerFilter, DrawerStore, StorageEngine, StorageLayout};
 use serde_yaml::Mapping;
-use tokio::runtime::Runtime;
 use tracing_subscriber::{EnvFilter, fmt};
 
 const DEFERRED_COMMAND_DOC: &str = "docs/rust-phase-plans/Phase09-Deferred-Commands.md";
@@ -489,7 +488,7 @@ where
 
     let config = load_runtime_config(palace_override, context).map_err(config_error)?;
     let use_temp_storage = dry_run && !palace_exists(&config.palace_path);
-    let runtime = Runtime::new().map_err(runtime_error)?;
+    let runtime = build_runtime(&config).map_err(runtime_error)?;
     let dry_run_storage =
         if use_temp_storage { Some(tempfile::tempdir().map_err(io_error)?) } else { None };
     let storage_root =
@@ -511,6 +510,10 @@ where
                     agent,
                     limit: if limit == 0 { None } else { Some(limit) },
                     dry_run,
+                    max_embed_batch_size: config
+                        .low_cpu
+                        .enabled
+                        .then_some(config.low_cpu.effective_ingest_batch_size()),
                 },
             ))
             .map_err(ingest_error)?,
@@ -528,6 +531,10 @@ where
                     },
                     limit: if limit == 0 { None } else { Some(limit) },
                     dry_run,
+                    max_embed_batch_size: config
+                        .low_cpu
+                        .enabled
+                        .then_some(config.low_cpu.effective_ingest_batch_size()),
                 },
             ))
             .map_err(ingest_error)?,
@@ -560,13 +567,16 @@ where
         return Ok(no_palace_error(&config.palace_path));
     }
 
-    let runtime = Runtime::new().map_err(runtime_error)?;
+    let runtime = build_runtime(&config).map_err(runtime_error)?;
     let engine = runtime
         .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
         .map_err(storage_error)?;
     let mut provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
         .map_err(provider_error)?;
-    let mut search = SearchRuntime::new(provider);
+    let mut search = SearchRuntime::with_policy(
+        provider,
+        SearchRuntimePolicy { rerank_enabled: config.low_cpu.effective_rerank_enabled() },
+    );
 
     let wing_id = wing.as_deref().map(WingId::new).transpose().map_err(id_error)?;
     let room_id = room.as_deref().map(RoomId::new).transpose().map_err(id_error)?;
@@ -577,7 +587,7 @@ where
                 text: query.to_owned(),
                 wing: wing_id,
                 room: room_id,
-                limit: results,
+                limit: clamp_search_results(results, &config),
                 profile: config.embedding_profile,
             },
         ))
@@ -595,7 +605,7 @@ fn execute_status(
         return Ok(no_palace_error(&config.palace_path));
     }
 
-    let runtime = Runtime::new().map_err(runtime_error)?;
+    let runtime = build_runtime(&config).map_err(runtime_error)?;
     let engine = runtime
         .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
         .map_err(storage_error)?;
@@ -658,18 +668,22 @@ where
         ));
     }
 
-    let runtime = Runtime::new().map_err(runtime_error)?;
+    let runtime = build_runtime(&config).map_err(runtime_error)?;
     let engine = runtime
         .block_on(StorageEngine::open(&config.palace_path, config.embedding_profile))
         .map_err(storage_error)?;
     let provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
         .map_err(provider_error)?;
-    let search = SearchRuntime::new(provider);
+    let search = SearchRuntime::with_policy(
+        provider,
+        SearchRuntimePolicy { rerank_enabled: config.low_cpu.effective_rerank_enabled() },
+    );
     let rendered = runtime
         .block_on(search.wake_up(
             engine.drawer_store(),
             &WakeUpRequest {
                 wing: wing.as_deref().map(WingId::new).transpose().map_err(id_error)?,
+                layer1: wake_up_layer1_config(&config),
                 ..WakeUpRequest::default()
             },
         ))
@@ -965,6 +979,16 @@ fn default_embedding_cache_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".cache"))
         .join("mempalace")
         .join("embeddings")
+}
+
+fn clamp_search_results(results: usize, config: &MempalaceConfig) -> usize {
+    results.min(config.low_cpu.effective_search_results_limit())
+}
+
+fn wake_up_layer1_config(config: &MempalaceConfig) -> Layer1Config {
+    let mut layer1 = Layer1Config::default();
+    layer1.max_drawers = layer1.max_drawers.min(config.low_cpu.effective_wake_up_drawers_limit());
+    layer1
 }
 
 fn default_identity_banner() -> &'static str {
@@ -1264,6 +1288,99 @@ mod tests {
         assert_eq!(config.collection_name, "custom_collection");
         assert_eq!(config.embedding_profile, Some(EmbeddingProfile::LowCpu));
         assert_eq!(config.palace_path, Some(override_palace.display().to_string()));
+        assert_eq!(config.low_cpu, None);
+
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn low_cpu_search_results_are_clamped_by_runtime_config() {
+        let workspace = tempdir().unwrap();
+        let project_alpha = setup_project_fixture(workspace.path());
+        let project_beta = setup_second_project_fixture(workspace.path());
+        let balanced_root = temp_config_root("balanced-search");
+        let balanced_context = CliContext::for_tests(balanced_root.clone());
+        let config_root = temp_config_root("low-cpu-search");
+        fs::create_dir_all(&balanced_root).unwrap();
+        fs::create_dir_all(&config_root).unwrap();
+        write_file(
+            &config_root.join("config.json"),
+            r#"{
+  "version": 1,
+  "collection_name": "mempalace_drawers",
+  "embedding_profile": "low_cpu",
+  "low_cpu": {
+    "search_results_limit": 1
+  }
+}"#,
+        );
+        let context = CliContext::for_tests(config_root.clone());
+
+        run_cli(
+            ["init", project_alpha.to_str().unwrap(), "--yes"],
+            &balanced_context,
+            stub_provider,
+        )
+        .unwrap();
+        run_cli(
+            ["init", project_beta.to_str().unwrap(), "--yes"],
+            &balanced_context,
+            stub_provider,
+        )
+        .unwrap();
+        run_cli(["mine", project_alpha.to_str().unwrap()], &balanced_context, stub_provider)
+            .unwrap();
+        run_cli(["mine", project_beta.to_str().unwrap()], &balanced_context, stub_provider)
+            .unwrap();
+        run_cli(["init", project_alpha.to_str().unwrap(), "--yes"], &context, stub_provider)
+            .unwrap();
+        run_cli(["init", project_beta.to_str().unwrap(), "--yes"], &context, stub_provider)
+            .unwrap();
+        run_cli(["mine", project_alpha.to_str().unwrap()], &context, stub_provider).unwrap();
+        run_cli(["mine", project_beta.to_str().unwrap()], &context, stub_provider).unwrap();
+
+        let unclamped =
+            run_cli(["search", "roadmap", "--results", "5"], &balanced_context, stub_provider)
+                .unwrap();
+        let search =
+            run_cli(["search", "roadmap", "--results", "5"], &context, stub_provider).unwrap();
+
+        assert_eq!(unclamped.exit_code, 0);
+        assert!(unclamped.stdout.matches("  [").count() > 1);
+        assert_eq!(search.exit_code, 0);
+        assert_eq!(search.stdout.matches("  [").count(), 1);
+
+        fs::remove_dir_all(balanced_root).unwrap();
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn low_cpu_wake_up_drawers_are_clamped_by_runtime_config() {
+        let workspace = tempdir().unwrap();
+        let project_dir = setup_project_fixture(workspace.path());
+        let config_root = temp_config_root("low-cpu-wake-up");
+        fs::create_dir_all(&config_root).unwrap();
+        write_file(
+            &config_root.join("config.json"),
+            r#"{
+  "version": 1,
+  "collection_name": "mempalace_drawers",
+  "embedding_profile": "low_cpu",
+  "low_cpu": {
+    "degraded_mode": false,
+    "wake_up_drawers_limit": 1
+  }
+}"#,
+        );
+        let context = CliContext::for_tests(config_root.clone());
+
+        run_cli(["init", project_dir.to_str().unwrap(), "--yes"], &context, stub_provider).unwrap();
+        run_cli(["mine", project_dir.to_str().unwrap()], &context, stub_provider).unwrap();
+
+        let wake_up = run_cli(["wake-up"], &context, stub_provider).unwrap();
+
+        assert_eq!(wake_up.exit_code, 0);
+        assert_eq!(wake_up.stdout.matches("  - ").count(), 1);
 
         fs::remove_dir_all(config_root).unwrap();
     }

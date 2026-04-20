@@ -4,6 +4,7 @@
 mod config;
 
 pub use config::{
-    ConfigFileV1, ConfigLoader, DEFAULT_BASE_DIR, DEFAULT_COLLECTION_NAME, MempalaceConfig,
-    ProjectConfig, ProjectRoomConfig, ResolvedPaths,
+    ConfigFileV1, ConfigLoader, DEFAULT_BASE_DIR, DEFAULT_COLLECTION_NAME, LowCpuConfigFileV1,
+    LowCpuRuntimeConfig, MempalaceConfig, ProjectConfig, ProjectRoomConfig, ResolvedPaths,
+    build_runtime,
 };
