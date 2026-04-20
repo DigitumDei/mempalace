@@ -39,6 +39,19 @@ Cut a first Rust release with frozen schemas, known scope boundaries, passing ga
 - Operator documentation
 - Explicit release scope statement
 
+## Current Branch Artifacts
+
+The release-readiness documentation set for the implemented Rust surface lives in [../rust-release/README.md](../rust-release/README.md).
+
+Current artifacts added for Phase 12 documentation and scope freeze:
+
+- [Release Scope](../rust-release/Release-Scope.md)
+- [CLI Surface](../rust-release/CLI-Surface.md)
+- [Config Schema](../rust-release/Config-Schema.md)
+- [Standard Operator Guide](../rust-release/Operator-Standard.md)
+- [Low-CPU Operator Guide](../rust-release/Operator-Low-CPU.md)
+- [Packaging And Validation](../rust-release/Packaging-And-Validation.md)
+
 ## To-Do Checklist
 
 - [ ] Freeze CLI command surface.
