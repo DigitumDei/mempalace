@@ -428,7 +428,7 @@ fn expand_path(value: &str) -> Result<PathBuf> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use mempalace_core::EmbeddingProfile;
