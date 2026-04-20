@@ -389,7 +389,7 @@ mod tests {
 
     use super::{
         ConfigLoader, DEFAULT_COLLECTION_NAME, DEFAULT_LOW_CPU_INGEST_BATCH_SIZE,
-        LowCpuRuntimeConfig,
+        LowCpuConfigFileV1, LowCpuRuntimeConfig,
     };
 
     fn temp_dir() -> PathBuf {

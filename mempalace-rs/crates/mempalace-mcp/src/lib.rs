@@ -1735,7 +1735,7 @@ mod tests {
             ))
             .await;
 
-        assert_eq!(second["error"]["code"], json!(-32603));
+        assert_eq!(second["error"]["code"], json!(-32000));
         assert_eq!(second["error"]["message"], "server busy: low_cpu queue limit exceeded");
 
         release_tx.send(()).unwrap();
