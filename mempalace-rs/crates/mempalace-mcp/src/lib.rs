@@ -33,6 +33,7 @@ const SERVER_NAME: &str = "mempalace";
 const SERVER_VERSION: &str = "2.0.0";
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const DEFAULT_DUPLICATE_THRESHOLD: f32 = 0.9;
+const DUPLICATE_SEARCH_LIMIT: usize = 5;
 const DIARY_ROOM: &str = "diary";
 const DIARY_HALL: &str = "hall_diary";
 const DIARY_TOPIC_PREFIX: &str = "diary:";
@@ -1042,14 +1043,17 @@ where
     }
 
     async fn find_duplicates(&mut self, content: &str, threshold: f32) -> ToolResult<Vec<Value>> {
+        // Duplicate prevention is a write-path correctness check, so keep a fixed semantic
+        // search window instead of applying low-CPU UX caps or rerank score blending.
         let query = SearchQuery {
             text: content.to_owned(),
             wing: None,
             room: None,
-            limit: self.config.low_cpu.effective_search_results_limit().min(5),
+            limit: DUPLICATE_SEARCH_LIMIT,
             profile: self.config.embedding_profile,
         };
-        let results = self.search.search(self.storage.drawer_store(), &query).await.map_tool()?;
+        let results =
+            self.search.search_semantic(self.storage.drawer_store(), &query).await.map_tool()?;
         Ok(results
             .into_iter()
             .filter(|result| result.score >= threshold)
@@ -1680,6 +1684,71 @@ mod tests {
 
         let payload = decode_tool_payload(&response).unwrap();
         assert_eq!(payload["results"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn duplicate_check_uses_semantic_scores_even_when_rerank_is_enabled() {
+        let harness = test_harness_with_config(
+            LowCpuRuntimeConfig {
+                enabled: true,
+                worker_threads: 1,
+                max_blocking_threads: 1,
+                queue_limit: 32,
+                ingest_batch_size: 8,
+                search_results_limit: 1,
+                wake_up_drawers_limit: 8,
+                degraded_mode: false,
+                rerank_enabled: true,
+            },
+            EmbeddingProfile::Balanced,
+        )
+        .await;
+        let content = "session ledger rewrite";
+        let embedding =
+            DeterministicStubProvider::new(EmbeddingProfile::Balanced).vector_for(content);
+        let runtime = harness.server.runtime.lock().await;
+        runtime
+            .storage
+            .drawer_store()
+            .put_drawers(
+                &[DrawerRecord {
+                    id: DrawerId::new("wing_code/session-ledger/0001").unwrap(),
+                    wing: WingId::new("wing_code").unwrap(),
+                    room: RoomId::new("session-ledger").unwrap(),
+                    hall: Some("hall_facts".to_owned()),
+                    date: Some(date!(2026 - 04 - 12)),
+                    source_file: "session-ledger.md".to_owned(),
+                    chunk_index: 0,
+                    ingest_mode: "fixtures".to_owned(),
+                    extract_mode: None,
+                    added_by: "tests".to_owned(),
+                    filed_at: datetime!(2026-04-12 09:00:00 UTC),
+                    importance: None,
+                    emotional_weight: None,
+                    weight: None,
+                    content: content.to_owned(),
+                    content_hash: hash_text(content),
+                    embedding,
+                }],
+                DuplicateStrategy::Error,
+            )
+            .await
+            .unwrap();
+        drop(runtime);
+
+        let duplicate = harness
+            .server
+            .handle_request(tool_call(
+                44,
+                "mempalace_check_duplicate",
+                json!({"content":"session diary ops","threshold":0.9}),
+            ))
+            .await;
+
+        let payload = decode_tool_payload(&duplicate).unwrap();
+        assert_eq!(payload["is_duplicate"], true);
+        assert_eq!(payload["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["matches"][0]["content"], "session ledger rewrite");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

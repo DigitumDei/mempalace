@@ -172,6 +172,29 @@ where
     where
         S: DrawerStore,
     {
+        self.search_with_rerank(store, query, self.policy.rerank_enabled).await
+    }
+
+    pub async fn search_semantic<S>(
+        &mut self,
+        store: &S,
+        query: &SearchQuery,
+    ) -> Result<Vec<SearchResult>>
+    where
+        S: DrawerStore,
+    {
+        self.search_with_rerank(store, query, false).await
+    }
+
+    async fn search_with_rerank<S>(
+        &mut self,
+        store: &S,
+        query: &SearchQuery,
+        rerank_enabled: bool,
+    ) -> Result<Vec<SearchResult>>
+    where
+        S: DrawerStore,
+    {
         let provider_profile = self.provider.profile().profile;
         if provider_profile != query.profile {
             return Err(SearchError::ProfileMismatch {
@@ -200,11 +223,8 @@ where
             room: query.room.clone(),
             ..DrawerFilter::default()
         };
-        let candidate_limit = if self.policy.rerank_enabled {
-            query.limit.saturating_mul(2).max(query.limit)
-        } else {
-            query.limit
-        };
+        let candidate_limit =
+            if rerank_enabled { query.limit.saturating_mul(2) } else { query.limit };
         let matches = store
             .search_drawers(&SearchRequest {
                 embedding: query_embedding,
@@ -214,7 +234,7 @@ where
             })
             .await?;
 
-        let ranked = if self.policy.rerank_enabled {
+        let ranked = if rerank_enabled {
             rerank_matches(&query.text, matches, query.limit)
         } else {
             rank_matches(matches, query.limit)
@@ -577,9 +597,9 @@ fn lexical_overlap_score(query_terms: &[String], content: &str) -> f32 {
 
 fn normalized_terms(value: &str) -> Vec<String> {
     value
-        .split(|c: char| !c.is_ascii_alphanumeric())
+        .split(|c: char| !c.is_alphanumeric())
         .filter(|term| !term.is_empty())
-        .map(|term| term.to_ascii_lowercase())
+        .map(|term| term.chars().flat_map(char::to_lowercase).collect())
         .collect()
 }
 
@@ -1071,7 +1091,7 @@ mod tests {
                     "project_alpha",
                     "backend",
                     "backend.md",
-                    "session refresh keeps auth tokens valid",
+                    "session lease keeps auth tokens valid",
                     Some(0.02),
                     datetime!(2026-04-11 09:00:00 UTC),
                 ),
@@ -1111,6 +1131,52 @@ mod tests {
         assert_eq!(store.search_limits.lock().unwrap().as_slice(), &[2]);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].source_file, "backend-2.md");
+    }
+
+    #[tokio::test]
+    async fn search_semantic_ignores_rerank_policy_for_threshold_sensitive_callers() {
+        let store = SearchSpyStore {
+            drawers: vec![
+                record(
+                    "project_alpha/backend/0001",
+                    "project_alpha",
+                    "backend",
+                    "backend.md",
+                    "session lease keeps auth tokens valid",
+                    Some(0.02),
+                    datetime!(2026-04-11 09:00:00 UTC),
+                ),
+                record(
+                    "project_alpha/backend/0002",
+                    "project_alpha",
+                    "backend",
+                    "backend-2.md",
+                    "session refresh rotates session refresh auth token keys",
+                    Some(0.04),
+                    datetime!(2026-04-11 08:00:00 UTC),
+                ),
+            ],
+            list_calls: Arc::new(Mutex::new(0)),
+            search_limits: Arc::new(Mutex::new(Vec::new())),
+            include_cutoff_ties: Arc::new(Mutex::new(Vec::new())),
+        };
+        let runtime = &mut SearchRuntime::with_policy(
+            StubProvider { response: vec![embedding(0.0)] },
+            SearchRuntimePolicy { rerank_enabled: true },
+        );
+        let query = SearchQuery {
+            text: "session refresh auth".to_owned(),
+            wing: None,
+            room: None,
+            limit: 1,
+            profile: EmbeddingProfile::Balanced,
+        };
+
+        let reranked = runtime.search(&store, &query).await.unwrap();
+        let semantic = runtime.search_semantic(&store, &query).await.unwrap();
+
+        assert_eq!(reranked[0].source_file, "backend-2.md");
+        assert_eq!(semantic[0].source_file, "backend.md");
     }
 
     #[tokio::test]
@@ -1923,5 +1989,18 @@ mod tests {
         assert!(rendered.contains("first alpha entry  (alpha-1.txt)"));
         assert!(!rendered.contains("second alpha entry"));
         assert!(rendered.contains("... (more in L3 search)"));
+    }
+
+    #[test]
+    fn normalized_terms_preserve_unicode_words() {
+        assert_eq!(
+            normalized_terms("CAFÉ 日本語 Привет -- auth"),
+            vec!["café", "日本語", "привет", "auth"]
+        );
+        assert!(
+            (lexical_overlap_score(&normalized_terms("日本語 café"), "日本語 café notes") - 1.0)
+                .abs()
+                < 1e-6
+        );
     }
 }
