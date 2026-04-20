@@ -16,7 +16,7 @@ use mempalace_graph::{
     AddFactRequest, EntityKind, KnowledgeGraphRuntime, PalaceGraphSnapshot, QueryDirection,
     derive_palace_graph_from_store, find_tunnels, traverse_graph,
 };
-use mempalace_search::SearchRuntime;
+use mempalace_search::{SearchRuntime, SearchRuntimePolicy};
 use mempalace_storage::{
     DrawerFilter, DrawerStore, DuplicateStrategy, IngestCommitRequest, StorageEngine,
 };
@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use time::{Date, OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore, TryAcquireError};
 
 pub use mempalace_core as core;
 
@@ -436,6 +436,7 @@ where
 #[derive(Debug, Clone)]
 pub struct McpServer<P> {
     runtime: Arc<Mutex<McpRuntime<P>>>,
+    queue_limit: Arc<Semaphore>,
 }
 
 impl McpServer<FastembedProvider> {
@@ -459,8 +460,12 @@ where
     P: EmbeddingProvider + Send,
 {
     pub async fn from_parts(config: MempalaceConfig, provider: P) -> Result<Self> {
+        let queue_limit = config.low_cpu.effective_queue_limit().min(Semaphore::MAX_PERMITS);
         let runtime = McpRuntime::new(config, provider).await?;
-        Ok(Self { runtime: Arc::new(Mutex::new(runtime)) })
+        Ok(Self {
+            runtime: Arc::new(Mutex::new(runtime)),
+            queue_limit: Arc::new(Semaphore::new(queue_limit)),
+        })
     }
 
     pub async fn handle_json_value(&self, request: Value) -> Value {
@@ -530,6 +535,20 @@ where
             );
         };
 
+        let _permit = match self.queue_limit.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(TryAcquireError::NoPermits) => {
+                return jsonrpc_error(
+                    call.id,
+                    ErrorCode::InternalError,
+                    "server busy: low_cpu queue limit exceeded".to_owned(),
+                );
+            }
+            Err(TryAcquireError::Closed) => {
+                return jsonrpc_error(call.id, ErrorCode::InternalError, "server unavailable");
+            }
+        };
+
         let mut runtime = self.runtime.lock().await;
         let result = match tool {
             ToolName::Status => runtime.tool_status().await,
@@ -582,7 +601,14 @@ where
 {
     async fn new(config: MempalaceConfig, provider: P) -> Result<Self> {
         let storage = StorageEngine::open(&config.palace_path, config.embedding_profile).await?;
-        Ok(Self { config, storage, search: SearchRuntime::new(provider) })
+        Ok(Self {
+            search: SearchRuntime::with_policy(
+                provider,
+                SearchRuntimePolicy { rerank_enabled: config.low_cpu.effective_rerank_enabled() },
+            ),
+            config,
+            storage,
+        })
     }
 
     async fn tool_status(&mut self) -> ToolResult<Value> {
@@ -648,7 +674,9 @@ where
 
     async fn tool_search(&mut self, arguments: &Value) -> ToolResult<Value> {
         let query = required_string(arguments, "query")?;
-        let limit = optional_usize(arguments, "limit")?.unwrap_or(5);
+        let limit = optional_usize(arguments, "limit")?
+            .unwrap_or(5)
+            .min(self.config.low_cpu.effective_search_results_limit());
         let wing =
             optional_string(arguments, "wing")?.map(|value| parse_wing_id(&value)).transpose()?;
         let room =
@@ -1014,7 +1042,7 @@ where
             text: content.to_owned(),
             wing: None,
             room: None,
-            limit: 5,
+            limit: self.config.low_cpu.effective_search_results_limit().min(5),
             profile: self.config.embedding_profile,
         };
         let results = self.search.search(self.storage.drawer_store(), &query).await.map_tool()?;
@@ -1397,6 +1425,9 @@ fn fixture_root() -> PathBuf {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::mpsc;
 
     use tempfile::TempDir;
     use time::macros::{date, datetime};
@@ -1409,24 +1440,70 @@ mod tests {
     }
 
     async fn test_harness() -> TestHarness {
+        test_harness_with_config(
+            LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::Balanced),
+            EmbeddingProfile::Balanced,
+        )
+        .await
+    }
+
+    async fn test_harness_with_config(
+        low_cpu: LowCpuRuntimeConfig,
+        embedding_profile: EmbeddingProfile,
+    ) -> TestHarness {
         let tempdir = TempDir::new().unwrap();
         let palace_path = tempdir.path().join("palace");
         let config = MempalaceConfig {
             schema_version: 1,
             collection_name: "mempalace_drawers".to_owned(),
             palace_path,
-            embedding_profile: EmbeddingProfile::Balanced,
-            low_cpu: LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::Balanced),
+            embedding_profile,
+            low_cpu,
         };
-        let server = McpServer::from_parts(
-            config,
-            DeterministicStubProvider::new(EmbeddingProfile::Balanced),
-        )
-        .await
-        .unwrap();
+        let server =
+            McpServer::from_parts(config, DeterministicStubProvider::new(embedding_profile))
+                .await
+                .unwrap();
         seed_drawers(&server).await;
         seed_knowledge_graph(&server).await;
         TestHarness { _tempdir: tempdir, server }
+    }
+
+    #[derive(Debug, Clone)]
+    struct BlockingProvider {
+        started_tx: Arc<std::sync::Mutex<Option<mpsc::Sender<()>>>>,
+        release_rx: Arc<std::sync::Mutex<mpsc::Receiver<()>>>,
+    }
+
+    impl EmbeddingProvider for BlockingProvider {
+        fn profile(&self) -> &'static mempalace_core::EmbeddingProfileMetadata {
+            EmbeddingProfile::Balanced.metadata()
+        }
+
+        fn startup_validation(&self) -> mempalace_embeddings::Result<StartupValidation> {
+            Ok(StartupValidation {
+                status: StartupValidationStatus::Ready,
+                cache_root: PathBuf::from("/tmp"),
+                model_id: EmbeddingProfile::Balanced.metadata().model_id,
+                detail: "blocking".to_owned(),
+            })
+        }
+
+        fn embed(
+            &mut self,
+            request: &EmbeddingRequest,
+        ) -> mempalace_embeddings::Result<mempalace_embeddings::EmbeddingResponse> {
+            if let Some(sender) = self.started_tx.lock().unwrap().take() {
+                let _ = sender.send(());
+            }
+            let _ = self.release_rx.lock().unwrap().recv();
+            mempalace_embeddings::EmbeddingResponse::from_vectors(
+                vec![vec![0.0; EmbeddingProfile::Balanced.metadata().dimensions]; request.len()],
+                EmbeddingProfile::Balanced.metadata().dimensions,
+                EmbeddingProfile::Balanced,
+                EmbeddingProfile::Balanced.metadata().model_id,
+            )
+        }
     }
 
     async fn seed_drawers(server: &McpServer<DeterministicStubProvider>) {
@@ -1569,6 +1646,97 @@ mod tests {
                 .iter()
                 .all(|result| result.get("similarity").is_some())
         );
+    }
+
+    #[tokio::test]
+    async fn search_tool_clamps_results_under_low_cpu_config() {
+        let harness = test_harness_with_config(
+            LowCpuRuntimeConfig {
+                enabled: true,
+                worker_threads: 1,
+                max_blocking_threads: 1,
+                queue_limit: 32,
+                ingest_batch_size: 8,
+                search_results_limit: 1,
+                wake_up_drawers_limit: 8,
+                degraded_mode: false,
+                rerank_enabled: false,
+            },
+            EmbeddingProfile::Balanced,
+        )
+        .await;
+        let response = harness
+            .server
+            .handle_request(tool_call(
+                41,
+                "mempalace_search",
+                json!({"query":"auth migration parity","limit":5}),
+            ))
+            .await;
+
+        let payload = decode_tool_payload(&response).unwrap();
+        assert_eq!(payload["results"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queue_limit_rejects_excess_concurrent_requests() {
+        let tempdir = TempDir::new().unwrap();
+        let palace_path = tempdir.path().join("palace");
+        let config = MempalaceConfig {
+            schema_version: 1,
+            collection_name: "mempalace_drawers".to_owned(),
+            palace_path,
+            embedding_profile: EmbeddingProfile::Balanced,
+            low_cpu: LowCpuRuntimeConfig {
+                enabled: true,
+                worker_threads: 1,
+                max_blocking_threads: 1,
+                queue_limit: 1,
+                ingest_batch_size: 8,
+                search_results_limit: 5,
+                wake_up_drawers_limit: 8,
+                degraded_mode: false,
+                rerank_enabled: false,
+            },
+        };
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = McpServer::from_parts(
+            config,
+            BlockingProvider {
+                started_tx: Arc::new(std::sync::Mutex::new(Some(started_tx))),
+                release_rx: Arc::new(std::sync::Mutex::new(release_rx)),
+            },
+        )
+        .await
+        .unwrap();
+
+        let first_server = server.clone();
+        let first = tokio::spawn(async move {
+            first_server
+                .handle_request(tool_call(
+                    42,
+                    "mempalace_search",
+                    json!({"query":"auth migration parity","limit":1}),
+                ))
+                .await
+        });
+        started_rx.recv().unwrap();
+
+        let second = server
+            .handle_request(tool_call(
+                43,
+                "mempalace_search",
+                json!({"query":"auth migration parity","limit":1}),
+            ))
+            .await;
+
+        assert_eq!(second["error"]["code"], json!(-32603));
+        assert_eq!(second["error"]["message"], "server busy: low_cpu queue limit exceeded");
+
+        release_tx.send(()).unwrap();
+        let first = first.await.unwrap();
+        assert!(first.get("result").is_some());
     }
 
     #[tokio::test]

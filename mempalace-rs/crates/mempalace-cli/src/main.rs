@@ -17,7 +17,7 @@ use mempalace_ingest::{
     ConversationExtractMode, ConversationIngestRequest, IngestSummary, ProjectIngestRequest,
     ingest_conversations, ingest_project,
 };
-use mempalace_search::{Layer1Config, SearchRuntime, WakeUpRequest};
+use mempalace_search::{Layer1Config, SearchRuntime, SearchRuntimePolicy, WakeUpRequest};
 use mempalace_storage::{DrawerFilter, DrawerStore, StorageEngine, StorageLayout};
 use serde_yaml::Mapping;
 use tokio::runtime::{Builder, Runtime};
@@ -514,7 +514,7 @@ where
                     max_embed_batch_size: config
                         .low_cpu
                         .enabled
-                        .then_some(config.low_cpu.ingest_batch_size),
+                        .then_some(config.low_cpu.effective_ingest_batch_size()),
                 },
             ))
             .map_err(ingest_error)?,
@@ -535,7 +535,7 @@ where
                     max_embed_batch_size: config
                         .low_cpu
                         .enabled
-                        .then_some(config.low_cpu.ingest_batch_size),
+                        .then_some(config.low_cpu.effective_ingest_batch_size()),
                 },
             ))
             .map_err(ingest_error)?,
@@ -574,7 +574,10 @@ where
         .map_err(storage_error)?;
     let mut provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
         .map_err(provider_error)?;
-    let mut search = SearchRuntime::new(provider);
+    let mut search = SearchRuntime::with_policy(
+        provider,
+        SearchRuntimePolicy { rerank_enabled: config.low_cpu.effective_rerank_enabled() },
+    );
 
     let wing_id = wing.as_deref().map(WingId::new).transpose().map_err(id_error)?;
     let room_id = room.as_deref().map(RoomId::new).transpose().map_err(id_error)?;
@@ -672,7 +675,10 @@ where
         .map_err(storage_error)?;
     let provider = provider_factory(config.embedding_profile, default_embedding_cache_dir())
         .map_err(provider_error)?;
-    let search = SearchRuntime::new(provider);
+    let search = SearchRuntime::with_policy(
+        provider,
+        SearchRuntimePolicy { rerank_enabled: config.low_cpu.effective_rerank_enabled() },
+    );
     let rendered = runtime
         .block_on(search.wake_up(
             engine.drawer_store(),
@@ -989,12 +995,14 @@ fn build_runtime(config: &MempalaceConfig) -> std::io::Result<Runtime> {
 }
 
 fn clamp_search_results(results: usize, config: &MempalaceConfig) -> usize {
-    results.min(config.low_cpu.search_results_limit)
+    results.min(config.low_cpu.effective_search_results_limit())
 }
 
 fn wake_up_layer1_config(config: &MempalaceConfig) -> Layer1Config {
     Layer1Config {
-        max_drawers: Layer1Config::default().max_drawers.min(config.low_cpu.wake_up_drawers_limit),
+        max_drawers: Layer1Config::default()
+            .max_drawers
+            .min(config.low_cpu.effective_wake_up_drawers_limit()),
         ..Layer1Config::default()
     }
 }
@@ -1306,7 +1314,10 @@ mod tests {
         let workspace = tempdir().unwrap();
         let project_alpha = setup_project_fixture(workspace.path());
         let project_beta = setup_second_project_fixture(workspace.path());
+        let balanced_root = temp_config_root("balanced-search");
+        let balanced_context = CliContext::for_tests(balanced_root.clone());
         let config_root = temp_config_root("low-cpu-search");
+        fs::create_dir_all(&balanced_root).unwrap();
         fs::create_dir_all(&config_root).unwrap();
         write_file(
             &config_root.join("config.json"),
@@ -1321,6 +1332,22 @@ mod tests {
         );
         let context = CliContext::for_tests(config_root.clone());
 
+        run_cli(
+            ["init", project_alpha.to_str().unwrap(), "--yes"],
+            &balanced_context,
+            stub_provider,
+        )
+        .unwrap();
+        run_cli(
+            ["init", project_beta.to_str().unwrap(), "--yes"],
+            &balanced_context,
+            stub_provider,
+        )
+        .unwrap();
+        run_cli(["mine", project_alpha.to_str().unwrap()], &balanced_context, stub_provider)
+            .unwrap();
+        run_cli(["mine", project_beta.to_str().unwrap()], &balanced_context, stub_provider)
+            .unwrap();
         run_cli(["init", project_alpha.to_str().unwrap(), "--yes"], &context, stub_provider)
             .unwrap();
         run_cli(["init", project_beta.to_str().unwrap(), "--yes"], &context, stub_provider)
@@ -1328,11 +1355,48 @@ mod tests {
         run_cli(["mine", project_alpha.to_str().unwrap()], &context, stub_provider).unwrap();
         run_cli(["mine", project_beta.to_str().unwrap()], &context, stub_provider).unwrap();
 
+        let unclamped =
+            run_cli(["search", "roadmap", "--results", "5"], &balanced_context, stub_provider)
+                .unwrap();
         let search =
             run_cli(["search", "roadmap", "--results", "5"], &context, stub_provider).unwrap();
 
+        assert_eq!(unclamped.exit_code, 0);
+        assert!(unclamped.stdout.matches("  [").count() > 1);
         assert_eq!(search.exit_code, 0);
         assert_eq!(search.stdout.matches("  [").count(), 1);
+
+        fs::remove_dir_all(balanced_root).unwrap();
+        fs::remove_dir_all(config_root).unwrap();
+    }
+
+    #[test]
+    fn low_cpu_wake_up_drawers_are_clamped_by_runtime_config() {
+        let workspace = tempdir().unwrap();
+        let project_dir = setup_project_fixture(workspace.path());
+        let config_root = temp_config_root("low-cpu-wake-up");
+        fs::create_dir_all(&config_root).unwrap();
+        write_file(
+            &config_root.join("config.json"),
+            r#"{
+  "version": 1,
+  "collection_name": "mempalace_drawers",
+  "embedding_profile": "low_cpu",
+  "low_cpu": {
+    "degraded_mode": false,
+    "wake_up_drawers_limit": 1
+  }
+}"#,
+        );
+        let context = CliContext::for_tests(config_root.clone());
+
+        run_cli(["init", project_dir.to_str().unwrap(), "--yes"], &context, stub_provider).unwrap();
+        run_cli(["mine", project_dir.to_str().unwrap()], &context, stub_provider).unwrap();
+
+        let wake_up = run_cli(["wake-up"], &context, stub_provider).unwrap();
+
+        assert_eq!(wake_up.exit_code, 0);
+        assert_eq!(wake_up.stdout.matches("  - ").count(), 1);
 
         fs::remove_dir_all(config_root).unwrap();
     }

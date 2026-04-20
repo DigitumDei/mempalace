@@ -124,6 +124,12 @@ pub struct LayerRetrieveRequest {
 pub struct SearchRuntime<P> {
     provider: P,
     dialect: Dialect,
+    policy: SearchRuntimePolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SearchRuntimePolicy {
+    pub rerank_enabled: bool,
 }
 
 impl<P> SearchRuntime<P>
@@ -131,11 +137,23 @@ where
     P: EmbeddingProvider,
 {
     pub fn new(provider: P) -> Self {
-        Self::with_dialect(provider, Dialect::new())
+        Self::with_policy(provider, SearchRuntimePolicy::default())
+    }
+
+    pub fn with_policy(provider: P, policy: SearchRuntimePolicy) -> Self {
+        Self::with_dialect_and_policy(provider, Dialect::new(), policy)
     }
 
     pub fn with_dialect(provider: P, dialect: Dialect) -> Self {
-        Self { provider, dialect }
+        Self::with_dialect_and_policy(provider, dialect, SearchRuntimePolicy::default())
+    }
+
+    pub fn with_dialect_and_policy(
+        provider: P,
+        dialect: Dialect,
+        policy: SearchRuntimePolicy,
+    ) -> Self {
+        Self { provider, dialect, policy }
     }
 
     pub fn provider(&self) -> &P {
@@ -182,16 +200,27 @@ where
             room: query.room.clone(),
             ..DrawerFilter::default()
         };
+        let candidate_limit = if self.policy.rerank_enabled {
+            query.limit.saturating_mul(2).max(query.limit)
+        } else {
+            query.limit
+        };
         let matches = store
             .search_drawers(&SearchRequest {
                 embedding: query_embedding,
-                limit: query.limit,
+                limit: candidate_limit,
                 include_cutoff_ties: true,
                 filter,
             })
             .await?;
 
-        Ok(rank_matches(matches, query.limit)
+        let ranked = if self.policy.rerank_enabled {
+            rerank_matches(&query.text, matches, query.limit)
+        } else {
+            rank_matches(matches, query.limit)
+        };
+
+        Ok(ranked
             .into_iter()
             .map(|entry| SearchResult {
                 drawer_id: Some(entry.record.id.clone()),
@@ -443,6 +472,26 @@ fn rank_matches(matches: Vec<DrawerMatch>, limit: usize) -> Vec<RankedMatch> {
     ranked
 }
 
+fn rerank_matches(query: &str, matches: Vec<DrawerMatch>, limit: usize) -> Vec<RankedMatch> {
+    let query_terms = normalized_terms(query);
+    let mut ranked = matches
+        .into_iter()
+        .map(|matched| {
+            let base_score = normalize_score(matched.distance);
+            let lexical_score = lexical_overlap_score(&query_terms, &matched.record.content);
+            RankedMatch {
+                score: (base_score * 0.7) + (lexical_score * 0.3),
+                distance: matched.distance,
+                record: matched.record,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    ranked.sort_by(compare_ranked_matches);
+    ranked.truncate(limit);
+    ranked
+}
+
 fn compare_ranked_matches(left: &RankedMatch, right: &RankedMatch) -> Ordering {
     right
         .score
@@ -512,6 +561,28 @@ fn flatten_and_truncate(content: &str, limit: usize) -> String {
     }
 }
 
+fn lexical_overlap_score(query_terms: &[String], content: &str) -> f32 {
+    if query_terms.is_empty() {
+        return 0.0;
+    }
+
+    let content_terms = normalized_terms(content);
+    let matched = query_terms
+        .iter()
+        .filter(|term| content_terms.iter().any(|content_term| content_term == *term))
+        .count();
+
+    matched as f32 / query_terms.len() as f32
+}
+
+fn normalized_terms(value: &str) -> Vec<String> {
+    value
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(|term| term.to_ascii_lowercase())
+        .collect()
+}
+
 fn char_count(value: &str) -> usize {
     value.chars().count()
 }
@@ -542,8 +613,8 @@ struct RankedMatch {
 mod tests {
     use super::{
         Dialect, IdentitySource, Layer1Config, LayerRetrieveRequest, SearchError, SearchRuntime,
-        WakeUpFormat, WakeUpRequest, default_identity_path, default_identity_path_from_home,
-        generate_layer1, render_search_results, trim_similarity,
+        SearchRuntimePolicy, WakeUpFormat, WakeUpRequest, default_identity_path,
+        default_identity_path_from_home, generate_layer1, render_search_results, trim_similarity,
     };
     use async_trait::async_trait;
     use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
@@ -989,6 +1060,57 @@ mod tests {
             results.iter().map(|entry| entry.wing.as_str()).collect::<Vec<_>>(),
             vec!["wing_00", "wing_01", "wing_02"]
         );
+    }
+
+    #[tokio::test]
+    async fn rerank_policy_requests_extra_candidates_and_prefers_lexical_overlap() {
+        let store = SearchSpyStore {
+            drawers: vec![
+                record(
+                    "project_alpha/backend/0001",
+                    "project_alpha",
+                    "backend",
+                    "backend.md",
+                    "session refresh keeps auth tokens valid",
+                    Some(0.02),
+                    datetime!(2026-04-11 09:00:00 UTC),
+                ),
+                record(
+                    "project_alpha/backend/0002",
+                    "project_alpha",
+                    "backend",
+                    "backend-2.md",
+                    "session refresh rotates session refresh auth token keys",
+                    Some(0.04),
+                    datetime!(2026-04-11 08:00:00 UTC),
+                ),
+            ],
+            list_calls: Arc::new(Mutex::new(0)),
+            search_limits: Arc::new(Mutex::new(Vec::new())),
+            include_cutoff_ties: Arc::new(Mutex::new(Vec::new())),
+        };
+        let runtime = &mut SearchRuntime::with_policy(
+            StubProvider { response: vec![embedding(0.0)] },
+            SearchRuntimePolicy { rerank_enabled: true },
+        );
+
+        let results = runtime
+            .search(
+                &store,
+                &SearchQuery {
+                    text: "session refresh auth".to_owned(),
+                    wing: None,
+                    room: None,
+                    limit: 1,
+                    profile: EmbeddingProfile::Balanced,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(store.search_limits.lock().unwrap().as_slice(), &[2]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_file, "backend-2.md");
     }
 
     #[tokio::test]

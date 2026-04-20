@@ -16,6 +16,10 @@ const DEFAULT_LOW_CPU_QUEUE_LIMIT: usize = 32;
 const DEFAULT_LOW_CPU_INGEST_BATCH_SIZE: usize = 8;
 const DEFAULT_LOW_CPU_SEARCH_RESULTS_LIMIT: usize = 5;
 const DEFAULT_LOW_CPU_WAKE_UP_DRAWERS_LIMIT: usize = 8;
+const DEGRADED_LOW_CPU_QUEUE_LIMIT: usize = 8;
+const DEGRADED_LOW_CPU_INGEST_BATCH_SIZE: usize = 4;
+const DEGRADED_LOW_CPU_SEARCH_RESULTS_LIMIT: usize = 3;
+const DEGRADED_LOW_CPU_WAKE_UP_DRAWERS_LIMIT: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedPaths {
@@ -109,6 +113,58 @@ impl LowCpuRuntimeConfig {
         }
 
         self
+    }
+
+    pub fn effective_queue_limit(&self) -> usize {
+        if !self.enabled {
+            return usize::MAX;
+        }
+
+        if self.degraded_mode {
+            self.queue_limit.min(DEGRADED_LOW_CPU_QUEUE_LIMIT)
+        } else {
+            self.queue_limit
+        }
+    }
+
+    pub fn effective_ingest_batch_size(&self) -> usize {
+        if !self.enabled {
+            return usize::MAX;
+        }
+
+        if self.degraded_mode {
+            self.ingest_batch_size.min(DEGRADED_LOW_CPU_INGEST_BATCH_SIZE)
+        } else {
+            self.ingest_batch_size
+        }
+    }
+
+    pub fn effective_search_results_limit(&self) -> usize {
+        if !self.enabled {
+            return usize::MAX;
+        }
+
+        if self.degraded_mode {
+            self.search_results_limit.min(DEGRADED_LOW_CPU_SEARCH_RESULTS_LIMIT)
+        } else {
+            self.search_results_limit
+        }
+    }
+
+    pub fn effective_wake_up_drawers_limit(&self) -> usize {
+        if !self.enabled {
+            return usize::MAX;
+        }
+
+        if self.degraded_mode {
+            self.wake_up_drawers_limit.min(DEGRADED_LOW_CPU_WAKE_UP_DRAWERS_LIMIT)
+        } else {
+            self.wake_up_drawers_limit
+        }
+    }
+
+    pub fn effective_rerank_enabled(&self) -> bool {
+        self.enabled && !self.degraded_mode && self.rerank_enabled
     }
 }
 
@@ -331,7 +387,10 @@ mod tests {
 
     use mempalace_core::EmbeddingProfile;
 
-    use super::{ConfigLoader, DEFAULT_COLLECTION_NAME, DEFAULT_LOW_CPU_INGEST_BATCH_SIZE};
+    use super::{
+        ConfigLoader, DEFAULT_COLLECTION_NAME, DEFAULT_LOW_CPU_INGEST_BATCH_SIZE,
+        LowCpuRuntimeConfig,
+    };
 
     fn temp_dir() -> PathBuf {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
@@ -412,6 +471,38 @@ mod tests {
         assert!(config.low_cpu.rerank_enabled);
 
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn degraded_mode_tightens_effective_limits_and_disables_rerank() {
+        let config = LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::LowCpu);
+
+        assert_eq!(config.effective_queue_limit(), 8);
+        assert_eq!(config.effective_ingest_batch_size(), 4);
+        assert_eq!(config.effective_search_results_limit(), 3);
+        assert_eq!(config.effective_wake_up_drawers_limit(), 4);
+        assert!(!config.effective_rerank_enabled());
+    }
+
+    #[test]
+    fn non_degraded_low_cpu_uses_explicit_overrides_for_effective_limits() {
+        let config = LowCpuRuntimeConfig::defaults_for_profile(EmbeddingProfile::LowCpu)
+            .with_overrides(Some(LowCpuConfigFileV1 {
+                worker_threads: None,
+                max_blocking_threads: None,
+                queue_limit: Some(11),
+                ingest_batch_size: Some(6),
+                search_results_limit: Some(9),
+                wake_up_drawers_limit: Some(7),
+                degraded_mode: Some(false),
+                rerank_enabled: Some(true),
+            }));
+
+        assert_eq!(config.effective_queue_limit(), 11);
+        assert_eq!(config.effective_ingest_batch_size(), 6);
+        assert_eq!(config.effective_search_results_limit(), 9);
+        assert_eq!(config.effective_wake_up_drawers_limit(), 7);
+        assert!(config.effective_rerank_enabled());
     }
 
     #[test]
