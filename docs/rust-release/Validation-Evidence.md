@@ -113,6 +113,56 @@ Workaround used: `--message-format=short` on all cargo invocations. rustc then b
 
 This is an upstream rustc bug, not a repo defect. A reproducer could be filed upstream if the behavior persists on a cleaner WSL install.
 
+## Windows-native build attempt (2026-04-21)
+
+A follow-up pass attempted to build natively on the Windows host (cargo 1.93.0, rustc 1.93.0) to complement the WSL artifacts.
+
+### What worked
+
+| Step | Result |
+| --- | --- |
+| `cargo check --workspace --all-targets --locked --message-format=short` | Clean, 1m 44s. Same warnings as WSL run. |
+| `cargo test -p <crate> --locked --message-format=short` × 6 crates | **96/96 passing.** All crates green on Windows native. |
+
+`cargo check` and `cargo test` succeed because both operate against the dev-profile build-script cache, which is populated on the first run and not re-executed unless inputs change.
+
+### What failed
+
+```
+cargo build --release -p mempalace-cli -p mempalace-mcp --locked --message-format=short
+```
+
+Failed with:
+
+```
+error: failed to run custom build command for `num-traits v0.2.19`
+could not execute process `target\release\build\num-traits-...\build-script-build` (never executed)
+An Application Control policy has blocked this file. (os error 4551)
+```
+
+The release profile uses a separate `target/release/build/` tree. Every build script is recompiled into a fresh unsigned `.exe` on first use, which Smart App Control blocks.
+
+### Root cause: Smart App Control is On
+
+Confirmed via registry:
+
+```
+VerifiedAndReputablePolicyState       = 1  (On)
+UsermodeCodeIntegrityPolicyEnforcementStatus = 2  (Enforced)
+```
+
+Smart App Control blocks unsigned PE executables that lack cloud reputation. Cargo's build-script outputs are unsigned and newly compiled — they have no reputation. Enabling Windows Developer Mode did not affect this.
+
+There is no "signed toolchain" workaround: the Rust project does not sign build-script outputs, and cargo provides no hook to sign them at emit time.
+
+### Cross-compilation path (not yet completed)
+
+An alternative is to cross-compile Windows `.exe` binaries from WSL using the `x86_64-pc-windows-gnu` target and `gcc-mingw-w64-x86-64`. The Rust std component for that target has been added (`rustup target add x86_64-pc-windows-gnu`) but `mingw-w64` was not yet installed on the WSL instance when this pass was paused. This path remains to be validated.
+
+### Summary
+
+Windows-native is usable for the dev/test loop (check + all tests). Release builds require either WSL (already validated) or the cross-compilation path above.
+
 ## Findings to surface for release planning
 
 1. **Declared MSRV is stale.** `mempalace-rs/Cargo.toml` declares `rust-version = "1.85"`. The locked dependency graph actually requires rustc ≥ 1.88 (`ort-sys`, `time`, `serde_with` and derived) with 1.86 minimums in several `datafusion` and `icu_*` crates. The workspace should either bump `rust-version` to match reality or pin compatible versions.
