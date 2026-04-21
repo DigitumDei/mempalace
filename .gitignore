@@ -6,3 +6,4 @@ __pycache__/
 .pytest_cache/
 mempal.yaml
 .phase0_vendor/
+.claude/
