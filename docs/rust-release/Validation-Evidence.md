@@ -1,6 +1,6 @@
 # Validation Evidence
 
-This document records the Phase 12 final-validation pass run on branch `ask/558-1776710642523` on 2026-04-20 and 2026-04-21. It is the dev-VM evidence row from [Packaging-And-Validation.md](Packaging-And-Validation.md). It is not reference-environment signoff.
+This document records the Phase 12 runtime-validation evidence gathered on branch `ask/558-1776710642523` on 2026-04-20 and 2026-04-21. It is the small-VM runtime row from [Packaging-And-Validation.md](Packaging-And-Validation.md). It does not replace the GitHub Actions `build-and-package` row.
 
 ## Environment
 
@@ -13,6 +13,8 @@ This document records the Phase 12 final-validation pass run on branch `ask/558-
 ## Commands
 
 All cargo invocations were issued from `mempalace-rs/` and used `--locked --message-format=short`. `--message-format=short` is required as a local workaround for a rustc 1.95 ICE in `annotate_snippets::renderer::styled_buffer::replace` that fires only under certain terminal widths; CI does not hit it. See "Known blockers and workarounds" below.
+
+This evidence predates the workflow-level `build-and-package` release job. For final release signoff, equivalent runtime checks should be re-run on this VM using the binaries uploaded by that GitHub Actions job rather than locally built artifacts.
 
 ### Workspace build
 
@@ -84,7 +86,7 @@ Driver: `validation-logs/run-bench.sh` running the `mempalace-embeddings` `embed
 
 Logs: `validation-logs/bench-balanced.log`, `validation-logs/bench-low-cpu.log`. Populated model cache: 110 MB across `models--Xenova--all-MiniLM-L6-v2/` (balanced) and `models--Qdrant--all-MiniLM-L6-v2-onnx/` (low_cpu quantized).
 
-These numbers were taken on a Windows/WSL dev VM with cross-FS I/O and do not constitute reference-environment signoff. The two profiles showing near-identical p95 on this host is expected when the VM has enough CPU headroom that the balanced profile is not the bottleneck; product claims for `low_cpu` live on the reference host.
+These numbers were taken on the target small VM under a Windows/WSL setup with cross-FS I/O, but they were produced from locally built binaries rather than the GitHub Actions packaging row. The two profiles showing near-identical p95 on this host is expected when the VM has enough CPU headroom that the balanced profile is not the bottleneck; final release claims for `low_cpu` should be attached to the artifact-based rerun.
 
 ## Known blockers and workarounds
 
@@ -172,13 +174,13 @@ Windows-native is usable for the dev/test loop (check + all tests). Release buil
 
 ## Reference-environment rows not covered here
 
-Per [Packaging-And-Validation.md](Packaging-And-Validation.md), the following remain outstanding and must be captured on the reference environment, not from this document:
+Per [Packaging-And-Validation.md](Packaging-And-Validation.md), the following remain outstanding and must be captured in addition to this document:
 
-- Full benchmark signoff against warm-query p95 budgets.
+- Successful GitHub Actions `build-and-package` output for the candidate revision.
+- Artifact-based runtime rerun on this small VM using `mempalace-release-binaries`.
 - Full low-CPU signoff against RSS and latency ceilings.
-- Final release-candidate install checks on supported targets.
 - Optional Python interop validation, applicable only if that feature ships.
 
 ## Release decision
 
-This document covers only the dev-VM row of the validation matrix. Per the release decision rule in `Packaging-And-Validation.md`, Rust v1 must not be marked release-ready from this document alone — attach reference-environment benchmark and low-CPU evidence before cutting a release tag.
+This document covers only the small-VM runtime row of the validation matrix, and today it is still based on local builds. Per the release decision rule in `Packaging-And-Validation.md`, Rust v1 must not be marked release-ready from this document alone — attach the successful GitHub Actions packaging row and the artifact-based runtime rerun before cutting a release tag.

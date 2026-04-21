@@ -282,3 +282,53 @@ jobs:
 
       - name: Run mempalace-cli tests
         run: cargo test -p mempalace-cli --locked -- --nocapture
+
+  build-and-package:
+    name: Build And Package
+    runs-on: ubuntu-latest
+    needs:
+      - workspace-build
+      - embeddings-tests
+      - embedding-baselines
+      - storage-tests
+      - ingest-tests
+      - graph-tests
+      - mcp-tests
+      - cli-tests
+    defaults:
+      run:
+        working-directory: mempalace-rs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mempalace-rs -> target
+
+      - name: Build release artifacts
+        run: cargo build --release --locked -p mempalace-cli -p mempalace-mcp
+
+      - name: Smoke packaged binaries
+        run: |
+          ./target/release/mempalace-cli --help
+          ./target/release/mempalace-mcp --help
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mempalace-release-binaries
+          path: |
+            mempalace-rs/target/release/mempalace-cli
+            mempalace-rs/target/release/mempalace-mcp
+          if-no-files-found: error

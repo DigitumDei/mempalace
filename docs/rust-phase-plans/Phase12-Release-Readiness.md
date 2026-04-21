@@ -18,13 +18,14 @@ Cut a first Rust release with frozen schemas, known scope boundaries, passing ga
 
 ### 2. Final Validation
 
-- Run the full regression, benchmark, and low-CPU suites.
+- Run the GitHub Actions build/package row and the supported-small-VM runtime row.
+- Run the full regression, benchmark, and low-CPU suites in the row where they belong.
 - Run optional Python interop validation only if that feature ships.
 
 ### 3. Packaging and Distribution
 
-- Build release artifacts.
-- Validate installation and execution paths for supported targets.
+- Build release artifacts on reference CI.
+- Validate installation and execution paths for supported targets from the produced artifacts.
 
 ### 4. Operator Documentation
 
@@ -51,6 +52,7 @@ Current artifacts added for Phase 12 documentation and scope freeze:
 - [Standard Operator Guide](../rust-release/Operator-Standard.md)
 - [Low-CPU Operator Guide](../rust-release/Operator-Low-CPU.md)
 - [Packaging And Validation](../rust-release/Packaging-And-Validation.md)
+- [Validation Evidence](../rust-release/Validation-Evidence.md)
 
 ## To-Do Checklist
 
@@ -64,8 +66,10 @@ Current artifacts added for Phase 12 documentation and scope freeze:
 - [ ] Run benchmark suite.
 - [ ] Run low-CPU suite.
 - [ ] Run optional interop suite if interop ships.
-- [ ] Build packaging artifacts.
-- [ ] Validate install flow for release artifacts.
+- [x] Define GitHub Actions build/package row.
+- [ ] Run GitHub Actions `build-and-package`.
+- [ ] Download promoted release artifacts onto the supported small VM.
+- [ ] Validate install flow for release artifacts on the supported small VM.
 - [ ] Write operator docs for standard deployment.
 - [ ] Write operator docs for low-CPU deployment.
 - [ ] Document model acquisition and warm-cache workflow.
@@ -74,7 +78,8 @@ Current artifacts added for Phase 12 documentation and scope freeze:
 
 ## Exit Gates
 
-- All required suites pass.
+- GitHub Actions `build-and-package` passes and publishes artifacts.
+- Small-VM runtime acceptance passes using those exact artifacts.
 - Benchmarks and low-CPU targets are met.
 - Release artifacts and operator docs are complete.
 - No unowned parity gaps remain.
