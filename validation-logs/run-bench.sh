@@ -2,9 +2,10 @@
 set -u
 source "$HOME/.cargo/env" 2>/dev/null || true
 
-ROOT=/mnt/d/SourceCode/mempalace
-WS=$ROOT/mempalace-rs
-LOG=$ROOT/validation-logs
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+WS="$ROOT/mempalace-rs"
+LOG="$SCRIPT_DIR"
 SMOKE=$HOME/.mempalace-smoke
 CACHE=$SMOKE/cache/mempalace/embeddings
 mkdir -p "$CACHE"
@@ -31,3 +32,5 @@ echo "SUMMARY: balanced=$BAL_RC low_cpu=$LOW_RC"
 echo "Cache contents:"
 find "$CACHE" -maxdepth 4 -type f | head -30
 du -sh "$CACHE" 2>/dev/null
+
+if [ $BAL_RC -ne 0 ] || [ $LOW_RC -ne 0 ]; then exit 1; fi

@@ -2,9 +2,10 @@
 set -u
 source "$HOME/.cargo/env" 2>/dev/null || true
 
-ROOT=/mnt/d/SourceCode/mempalace
-WS=$ROOT/mempalace-rs
-LOG=$ROOT/validation-logs
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+WS="$ROOT/mempalace-rs"
+LOG="$SCRIPT_DIR"
 CLI=$WS/target/release/mempalace-cli
 MCP=$WS/target/release/mempalace-mcp
 
@@ -37,7 +38,6 @@ Phase 12 release readiness covers final validation, packaging, and operator docu
 EOF
 
 # Pin state away from the user's real ~/.mempalace
-export HOME_BACKUP="$HOME"
 export XDG_CACHE_HOME="$SMOKE/cache"
 export MEMPALACE_EMBED_CACHE="$SMOKE/cache/mempalace/embeddings"
 export MEMPALACE_EMBED_ALLOW_DOWNLOADS=1
@@ -48,6 +48,7 @@ mkdir -p "$HOME"
 
 PALACE="$SMOKE/palace"
 
+overall=0
 run() {
   local label="$1"; shift
   echo "################################################################" | tee -a "$OUT"
@@ -58,6 +59,10 @@ run() {
   local rc=$?
   echo "### EXIT=$rc" | tee -a "$OUT"
   echo | tee -a "$OUT"
+  if [ $rc -ne 0 ]; then
+    echo "### FAILED: $label" | tee -a "$OUT"
+    overall=$rc
+  fi
   return $rc
 }
 
@@ -78,13 +83,15 @@ MCP_RC=$?
 echo "$MCP_OUT" | tee -a "$OUT"
 echo "### MCP EXIT=$MCP_RC" | tee -a "$OUT"
 
-# Validate MCP responses contain protocolVersion + mempalace_status tool.
 if echo "$MCP_OUT" | grep -q '"protocolVersion":"2024-11-05"' && \
    echo "$MCP_OUT" | grep -q 'mempalace_status'; then
   echo "### MCP smoke OK" | tee -a "$OUT"
 else
   echo "### MCP smoke FAILED" | tee -a "$OUT"
+  overall=1
 fi
+if [ $MCP_RC -ne 0 ]; then overall=$MCP_RC; fi
 
 echo "################################################################" | tee -a "$OUT"
 echo "DONE. Log: $OUT" | tee -a "$OUT"
+exit $overall
