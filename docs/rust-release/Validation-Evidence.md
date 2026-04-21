@@ -1,0 +1,134 @@
+# Validation Evidence
+
+This document records the Phase 12 final-validation pass run on branch `ask/558-1776710642523` on 2026-04-20 and 2026-04-21. It is the dev-VM evidence row from [Packaging-And-Validation.md](Packaging-And-Validation.md). It is not reference-environment signoff.
+
+## Environment
+
+- Host: Windows 11 Pro with Smart App Control / WDAC active.
+- Cargo was run inside WSL Ubuntu-24.04 against `/mnt/d/SourceCode/mempalace/mempalace-rs`. WDAC blocks freshly-linked `build-script-build.exe` binaries on the Windows side (`os error 4551`), so Windows-native cargo was not usable.
+- Toolchain: rustup stable (rustc 1.95.0, cargo 1.95.0).
+- protoc 3.21.12 from Ubuntu `protobuf-compiler`.
+- Logs: `validation-logs/` at the repo root.
+
+## Commands
+
+All cargo invocations were issued from `mempalace-rs/` and used `--locked --message-format=short`. `--message-format=short` is required as a local workaround for a rustc 1.95 ICE in `annotate_snippets::renderer::styled_buffer::replace` that fires only under certain terminal widths; CI does not hit it. See "Known blockers and workarounds" below.
+
+### Workspace build
+
+```
+cargo check --workspace --all-targets --locked --message-format=short
+```
+
+Result: clean compile of the full workspace in 2m 47s. Lint warnings only (see findings). Log: `validation-logs/cargo-check.log`.
+
+### Per-crate tests
+
+CI mirrors, one invocation per crate:
+
+```
+cargo test -p <crate> --locked --message-format=short -- --nocapture
+```
+
+| Crate | Tests | Time |
+| --- | --- | --- |
+| `mempalace-embeddings` | 22/22 | 0.03s |
+| `mempalace-storage` | 19/19 | 52.41s |
+| `mempalace-ingest` | 16/16 | 1.06s |
+| `mempalace-graph` | 16/16 | 2.17s |
+| `mempalace-mcp` | 4/4 | 0.98s |
+| `mempalace-cli` | 19/19 | 1.70s |
+| **Total** | **96/96** | |
+
+Logs: `validation-logs/test-*.log`, summary in `validation-logs/test-summary.txt`. Runner script: `validation-logs/run-per-crate-tests.sh`.
+
+### Release artifacts
+
+```
+cargo build --release -p mempalace-cli -p mempalace-mcp --locked --message-format=short
+```
+
+Result: both binaries built in 11m 29s.
+
+- `target/release/mempalace-cli` — 230,973,488 bytes
+- `target/release/mempalace-mcp` — 230,579,016 bytes
+
+Log: `validation-logs/release-build.log`.
+
+### Install-flow smoke
+
+Driver: `validation-logs/smoke-test.sh`. Log: `validation-logs/smoke.log`.
+
+Against an isolated palace root and a three-file fixture (`notes/welcome.md`, `notes/overview.md`, `planning/roadmap.md`):
+
+| Step | Command | Exit |
+| --- | --- | --- |
+| 1 | `mempalace-cli --help` | 0 |
+| 2 | `mempalace-cli --palace <root> init --yes <fixture>` | 0 (`startup_validation=ready` against warm cache) |
+| 3 | `mempalace-cli --palace <root> mine <fixture>` | 0 |
+| 4 | `mempalace-cli --palace <root> search "roadmap"` | 0 |
+| 5 | `mempalace-cli --palace <root> status` | 0 |
+| 6 | `mempalace-cli --palace <root> wake-up` | 0 |
+| 7 | `mempalace-mcp` receives `initialize` + `tools/list` on stdio | 0 |
+
+The MCP response advertised `protocolVersion: 2024-11-05` and all 19 frozen v1 tools listed in [Release-Scope.md](Release-Scope.md): `mempalace_status`, `mempalace_list_wings`, `mempalace_list_rooms`, `mempalace_get_taxonomy`, `mempalace_get_aaak_spec`, `mempalace_kg_query`, `mempalace_kg_add`, `mempalace_kg_invalidate`, `mempalace_kg_timeline`, `mempalace_kg_stats`, `mempalace_traverse`, `mempalace_find_tunnels`, `mempalace_graph_stats`, `mempalace_search`, `mempalace_check_duplicate`, `mempalace_add_drawer`, `mempalace_delete_drawer`, `mempalace_diary_write`, `mempalace_diary_read`.
+
+### Indicative benchmark (not signoff)
+
+Driver: `validation-logs/run-bench.sh` running the `mempalace-embeddings` `embedding_bench` example per the CI `embedding-baselines` job, with `MEMPALACE_EMBED_ALLOW_DOWNLOADS=1` and `MEMPALACE_EMBED_ITERATIONS=15`.
+
+| Profile | Warm p95 |
+| --- | --- |
+| `balanced` | 14.43 ms |
+| `low_cpu` | 14.92 ms |
+
+Logs: `validation-logs/bench-balanced.log`, `validation-logs/bench-low-cpu.log`. Populated model cache: 110 MB across `models--Xenova--all-MiniLM-L6-v2/` (balanced) and `models--Qdrant--all-MiniLM-L6-v2-onnx/` (low_cpu quantized).
+
+These numbers were taken on a Windows/WSL dev VM with cross-FS I/O and do not constitute reference-environment signoff. The two profiles showing near-identical p95 on this host is expected when the VM has enough CPU headroom that the balanced profile is not the bottleneck; product claims for `low_cpu` live on the reference host.
+
+## Known blockers and workarounds
+
+### 1. WDAC / Smart App Control on Windows
+
+Symptom: `error: failed to run custom build command … An Application Control policy has blocked this file. (os error 4551)` on unsigned `build-script-build.exe` binaries emitted by cargo.
+
+Applies to: Windows-native cargo (both Git Bash and PowerShell parents).
+
+Workaround used: run cargo inside WSL Ubuntu-24.04 against `/mnt/d/...`. WDAC does not apply to Linux ELF binaries under WSL.
+
+### 2. rustc 1.95 ICE in `annotate_snippets` renderer
+
+Symptom:
+
+```
+thread 'rustc' panicked at library/core/src/slice/index.rs:1031:55:
+slice index starts at 9 but ends at 8
+#0 [lint_mod] linting top-level module
+#1 [analysis] running analysis passes on crate `mempalace_embeddings`
+```
+
+Applies to: rustc 1.94.0 and 1.95.0 on this WSL host when rendering `missing_docs` warnings against `crates/mempalace-embeddings/src/lib.rs`. The panic site is inside the source-line truncation path in the ANSI diagnostic renderer, triggered only at certain terminal widths. CI (`dtolnay/rust-toolchain@stable`, same rustc 1.95.0) does not hit it.
+
+Workaround used: `--message-format=short` on all cargo invocations. rustc then bypasses `annotate_snippets` and emits `file:line:col: message`.
+
+This is an upstream rustc bug, not a repo defect. A reproducer could be filed upstream if the behavior persists on a cleaner WSL install.
+
+## Findings to surface for release planning
+
+1. **Declared MSRV is stale.** `mempalace-rs/Cargo.toml` declares `rust-version = "1.85"`. The locked dependency graph actually requires rustc ≥ 1.88 (`ort-sys`, `time`, `serde_with` and derived) with 1.86 minimums in several `datafusion` and `icu_*` crates. The workspace should either bump `rust-version` to match reality or pin compatible versions.
+2. **Accumulating lint warnings.** The workspace compiles clean but emits ~200 warnings, dominated by `missing_docs` in `mempalace-storage` (~161), `mempalace-embeddings` (30), plus unused imports in `mempalace-ingest` and `mempalace-mcp` and a dead `fn run_cli` in `mempalace-cli`. All are `warn`-level today; promoting to `deny` would block CI until closed.
+3. **Release binaries are strictly offline.** `FastembedProviderConfig::new` in `crates/mempalace-cli/src/main.rs:1002,1010` hardcodes `allow_downloads: false`. `MEMPALACE_EMBED_ALLOW_DOWNLOADS` is honored by the `embedding_bench` example but not by `mempalace-cli` or `mempalace-mcp`. This matches the documented intent in [Operator-Standard.md](Operator-Standard.md) that model acquisition is operator-managed, but operators currently have no shipped tool to warm the cache — during this validation the cache was warmed by running the `embedding_bench` example. Consider either a dedicated `mempalace-cli download-model` subcommand or explicit operator documentation pointing at the `embedding_bench` workaround.
+4. **`mempalace-rs-storage.yml` did not run on this branch.** The workflow is `paths:`-filtered to `mempalace-rs/**` and this branch only touches `docs/**`. The CI signal that normally covers workspace build and tests is therefore absent on the PR — any future validation-only branches should still run a manual dispatch or include a dummy change under `mempalace-rs/` to exercise CI.
+
+## Reference-environment rows not covered here
+
+Per [Packaging-And-Validation.md](Packaging-And-Validation.md), the following remain outstanding and must be captured on the reference environment, not from this document:
+
+- Full benchmark signoff against warm-query p95 budgets.
+- Full low-CPU signoff against RSS and latency ceilings.
+- Final release-candidate install checks on supported targets.
+- Optional Python interop validation, applicable only if that feature ships.
+
+## Release decision
+
+This document covers only the dev-VM row of the validation matrix. Per the release decision rule in `Packaging-And-Validation.md`, Rust v1 must not be marked release-ready from this document alone — attach reference-environment benchmark and low-CPU evidence before cutting a release tag.
