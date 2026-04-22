@@ -73,13 +73,23 @@ Operational rule:
 
 - Do not treat `init` as proof that assets are already present.
 - Treat the startup validation status as the source of truth.
+- By default both `mempalace-cli` and `mempalace-mcp` stay offline and will not download embedding assets.
+- Set `MEMPALACE_EMBED_ALLOW_DOWNLOADS=1` on first run when you want either binary to bootstrap missing model assets into the local cache.
 
 Recommended sequence:
 
 1. Run `init`.
-2. If validation is not `ready`, acquire or repair the embedding cache before relying on offline operation.
+2. If validation is not `ready`, either:
+   set `MEMPALACE_EMBED_ALLOW_DOWNLOADS=1` and re-run the command to let the binary fetch missing assets, or
+   pre-stage/repair the embedding cache out of band before relying on offline operation.
 3. Run a small `mine` or `search` flow to warm the chosen profile on the target host.
 4. Re-run `search` once to confirm warm-path behavior before calling the host production-ready.
+
+Example first-run bootstrap:
+
+```bash
+MEMPALACE_EMBED_ALLOW_DOWNLOADS=1 target/release/mempalace-cli mine /path/to/project
+```
 
 ## MCP Deployment
 
@@ -90,6 +100,12 @@ target/release/mempalace-mcp
 ```
 
 The server exposes the frozen v1 tool set listed in [Release Scope](Release-Scope.md).
+
+If the MCP host needs to bootstrap a cold cache on first start, launch it with:
+
+```bash
+MEMPALACE_EMBED_ALLOW_DOWNLOADS=1 target/release/mempalace-mcp
+```
 
 ## Storage Recovery
 

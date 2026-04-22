@@ -999,15 +999,23 @@ fn fastembed_provider(
     profile: EmbeddingProfile,
     cache_root: PathBuf,
 ) -> Result<FastembedProvider, Box<dyn std::error::Error>> {
-    Ok(FastembedProvider::new(profile, FastembedProviderConfig::new(cache_root))
-        .try_initialize()?)
+    Ok(FastembedProvider::new(profile, fastembed_provider_config(cache_root)).try_initialize()?)
 }
 
 fn fastembed_validation_provider(
     profile: EmbeddingProfile,
     cache_root: PathBuf,
 ) -> Result<FastembedProvider, Box<dyn std::error::Error>> {
-    Ok(FastembedProvider::new(profile, FastembedProviderConfig::new(cache_root)))
+    Ok(FastembedProvider::new(profile, fastembed_provider_config(cache_root)))
+}
+
+fn fastembed_provider_config(cache_root: PathBuf) -> FastembedProviderConfig {
+    let mut config = FastembedProviderConfig::new(cache_root);
+    if std::env::var_os("MEMPALACE_EMBED_ALLOW_DOWNLOADS").is_some() {
+        config.allow_downloads = true;
+        config.show_download_progress = true;
+    }
+    config
 }
 
 fn config_error(error: mempalace_core::MempalaceError) -> clap::Error {
@@ -1632,5 +1640,27 @@ mod tests {
         let result =
             fastembed_provider(EmbeddingProfile::Balanced, cache_root.path().to_path_buf());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn fastembed_provider_config_enables_downloads_from_env() {
+        let cache_root = tempdir().unwrap();
+        unsafe {
+            std::env::remove_var("MEMPALACE_EMBED_ALLOW_DOWNLOADS");
+        }
+        let default_config = fastembed_provider_config(cache_root.path().join("default"));
+        assert!(!default_config.allow_downloads);
+        assert!(!default_config.show_download_progress);
+
+        unsafe {
+            std::env::set_var("MEMPALACE_EMBED_ALLOW_DOWNLOADS", "1");
+        }
+        let download_config = fastembed_provider_config(cache_root.path().join("download"));
+        assert!(download_config.allow_downloads);
+        assert!(download_config.show_download_progress);
+
+        unsafe {
+            std::env::remove_var("MEMPALACE_EMBED_ALLOW_DOWNLOADS");
+        }
     }
 }
