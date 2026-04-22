@@ -35,16 +35,23 @@ where
     I: IntoIterator<Item = S>,
     S: Into<OsString>,
 {
-    let mut args = args.into_iter().map(Into::into);
-    let first = args.next()?;
-    if args.next().is_some() {
-        return None;
+    let mut saw_help = false;
+    let mut saw_version = false;
+
+    for arg in args.into_iter().map(Into::into) {
+        match arg.to_str() {
+            Some("--help") | Some("-h") => saw_help = true,
+            Some("--version") | Some("-V") => saw_version = true,
+            _ => {}
+        }
     }
 
-    match first.to_str() {
-        Some("--help") | Some("-h") => Some(help_text()),
-        Some("--version") | Some("-V") => Some(version_text()),
-        _ => None,
+    if saw_help {
+        Some(help_text())
+    } else if saw_version {
+        Some(version_text())
+    } else {
+        None
     }
 }
 
@@ -72,7 +79,9 @@ mod tests {
         assert_eq!(early_output(["-h"]), Some(help_text()));
         assert_eq!(early_output(["--version"]), Some(version_text()));
         assert_eq!(early_output(["-V"]), Some(version_text()));
-        assert_eq!(early_output(["--help", "--version"]), None);
+        assert_eq!(early_output(["--help", "--version"]), Some(help_text()));
+        assert_eq!(early_output(["--version", "--help"]), Some(help_text()));
+        assert_eq!(early_output(["--version", "--verbose"]), Some(version_text()));
         assert_eq!(early_output(std::iter::empty::<&str>()), None);
         assert_eq!(early_output(["--unknown"]), None);
     }

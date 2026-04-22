@@ -4,13 +4,13 @@ This guide covers the normal Rust deployment path for `mempalace-cli` and `mempa
 
 ## Prerequisites
 
-- Rust toolchain compatible with workspace `rust-version = 1.85`
+- Rust toolchain compatible with workspace `rust-version = 1.88`
 - Writable home directory for `~/.mempalace`
 - Writable cache directory for embedding assets
 
 ## Build
 
-From [mempalace-rs](/data/repos/.worktrees/digitumdei/mempalace/558/mempalace-rs):
+From the `mempalace-rs` directory:
 
 ```bash
 cargo build --release -p mempalace-cli -p mempalace-mcp
