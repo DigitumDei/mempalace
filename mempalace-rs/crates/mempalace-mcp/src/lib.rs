@@ -453,11 +453,12 @@ pub fn default_provider(profile: EmbeddingProfile) -> Result<FastembedProvider> 
         .unwrap_or_else(|| PathBuf::from(".cache"))
         .join("mempalace")
         .join("embeddings");
-    Ok(FastembedProvider::new(
-        profile,
-        FastembedProviderConfig::new(cache_root),
-    )
-    .try_initialize()?)
+    let mut config = FastembedProviderConfig::new(cache_root);
+    if std::env::var_os("MEMPALACE_EMBED_ALLOW_DOWNLOADS").is_some() {
+        config.allow_downloads = true;
+        config.show_download_progress = true;
+    }
+    Ok(FastembedProvider::new(profile, config).try_initialize()?)
 }
 
 impl<P> McpServer<P>
