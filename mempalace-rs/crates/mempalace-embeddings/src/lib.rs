@@ -717,7 +717,7 @@ mod tests {
         EmbeddingBenchmark, EmbeddingError, EmbeddingProvider, EmbeddingRequest, EmbeddingResponse,
         FastembedProvider, FastembedProviderConfig, ResolvedEmbeddingProfile,
         StartupValidationStatus, build_init_options, effective_cache_root_from_hf_home, env_flag,
-        percentile_millis, resolve_fastembed_model_layout, validate_cache,
+        env_flag_value, percentile_millis, resolve_fastembed_model_layout, validate_cache,
     };
     use std::env;
     use std::fs;
