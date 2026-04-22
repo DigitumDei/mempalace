@@ -11,7 +11,7 @@ use mempalace_config::{
 };
 use mempalace_core::{EmbeddingProfile, RoomId, SearchQuery, WingId};
 use mempalace_embeddings::{
-    EmbeddingProvider, FastembedProvider, FastembedProviderConfig, log_startup_validation,
+    EmbeddingProvider, FastembedProvider, FastembedProviderConfig, env_flag, log_startup_validation,
 };
 use mempalace_ingest::{
     ConversationExtractMode, ConversationIngestRequest, IngestSummary, ProjectIngestRequest,
@@ -1011,7 +1011,7 @@ fn fastembed_validation_provider(
 
 fn fastembed_provider_config(cache_root: PathBuf) -> FastembedProviderConfig {
     let mut config = FastembedProviderConfig::new(cache_root);
-    if std::env::var_os("MEMPALACE_EMBED_ALLOW_DOWNLOADS").is_some() {
+    if env_flag("MEMPALACE_EMBED_ALLOW_DOWNLOADS") {
         config.allow_downloads = true;
         config.show_download_progress = true;
     }
@@ -1640,27 +1640,5 @@ mod tests {
         let result =
             fastembed_provider(EmbeddingProfile::Balanced, cache_root.path().to_path_buf());
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn fastembed_provider_config_enables_downloads_from_env() {
-        let cache_root = tempdir().unwrap();
-        unsafe {
-            std::env::remove_var("MEMPALACE_EMBED_ALLOW_DOWNLOADS");
-        }
-        let default_config = fastembed_provider_config(cache_root.path().join("default"));
-        assert!(!default_config.allow_downloads);
-        assert!(!default_config.show_download_progress);
-
-        unsafe {
-            std::env::set_var("MEMPALACE_EMBED_ALLOW_DOWNLOADS", "1");
-        }
-        let download_config = fastembed_provider_config(cache_root.path().join("download"));
-        assert!(download_config.allow_downloads);
-        assert!(download_config.show_download_progress);
-
-        unsafe {
-            std::env::remove_var("MEMPALACE_EMBED_ALLOW_DOWNLOADS");
-        }
     }
 }

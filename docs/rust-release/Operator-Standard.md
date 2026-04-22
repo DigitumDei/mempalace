@@ -74,7 +74,7 @@ Operational rule:
 - Do not treat `init` as proof that assets are already present.
 - Treat the startup validation status as the source of truth.
 - By default both `mempalace-cli` and `mempalace-mcp` stay offline and will not download embedding assets.
-- Set `MEMPALACE_EMBED_ALLOW_DOWNLOADS=1` on first run when you want either binary to bootstrap missing model assets into the local cache.
+- Set `MEMPALACE_EMBED_ALLOW_DOWNLOADS` to an explicit truthy value (`1`, `true`, or `yes`) on first run when you want either binary to bootstrap missing model assets into the local cache.
 
 Recommended sequence:
 

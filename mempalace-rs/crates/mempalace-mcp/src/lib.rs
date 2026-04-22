@@ -10,7 +10,7 @@ use mempalace_config::{ConfigLoader, LowCpuRuntimeConfig, MempalaceConfig};
 use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
 use mempalace_embeddings::{
     EmbeddingError, EmbeddingProvider, EmbeddingRequest, FastembedProvider,
-    FastembedProviderConfig, StartupValidation, StartupValidationStatus,
+    FastembedProviderConfig, StartupValidation, StartupValidationStatus, env_flag,
 };
 use mempalace_graph::{
     AddFactRequest, EntityKind, KnowledgeGraphRuntime, PalaceGraphSnapshot, QueryDirection,
@@ -454,7 +454,7 @@ pub fn default_provider(profile: EmbeddingProfile) -> Result<FastembedProvider> 
         .join("mempalace")
         .join("embeddings");
     let mut config = FastembedProviderConfig::new(cache_root);
-    if std::env::var_os("MEMPALACE_EMBED_ALLOW_DOWNLOADS").is_some() {
+    if env_flag("MEMPALACE_EMBED_ALLOW_DOWNLOADS") {
         config.allow_downloads = true;
         config.show_download_progress = true;
     }

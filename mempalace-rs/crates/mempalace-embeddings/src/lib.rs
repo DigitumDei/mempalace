@@ -252,6 +252,13 @@ impl FastembedProviderConfig {
     }
 }
 
+/// Returns true only for explicit truthy environment values.
+pub fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
 /// Resolved profile details used by the runtime and validation layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedEmbeddingProfile {
@@ -707,9 +714,10 @@ mod tests {
     use super::{
         EmbeddingBenchmark, EmbeddingError, EmbeddingProvider, EmbeddingRequest, EmbeddingResponse,
         FastembedProvider, FastembedProviderConfig, ResolvedEmbeddingProfile,
-        StartupValidationStatus, build_init_options, effective_cache_root_from_hf_home,
+        StartupValidationStatus, build_init_options, effective_cache_root_from_hf_home, env_flag,
         percentile_millis, resolve_fastembed_model_layout, validate_cache,
     };
+    use std::env;
     use std::fs;
     use std::path::Path;
     use std::time::Duration;
@@ -917,6 +925,33 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.status, StartupValidationStatus::MissingAssets);
+    }
+
+    #[test]
+    fn env_flag_accepts_only_explicit_truthy_values() {
+        assert!(!matches_env_flag(None));
+        assert!(matches_env_flag(Some("1")));
+        assert!(matches_env_flag(Some("true")));
+        assert!(matches_env_flag(Some("TRUE")));
+        assert!(matches_env_flag(Some("yes")));
+        assert!(matches_env_flag(Some("YES")));
+        assert!(!matches_env_flag(Some("0")));
+        assert!(!matches_env_flag(Some("false")));
+        assert!(!matches_env_flag(Some("no")));
+        assert!(!matches_env_flag(Some("")));
+    }
+
+    fn matches_env_flag(value: Option<&str>) -> bool {
+        const TEST_ENV: &str = "MEMPALACE_EMBEDDINGS_ENV_FLAG_TEST";
+        match value {
+            Some(value) => unsafe { env::set_var(TEST_ENV, value) },
+            None => unsafe { env::remove_var(TEST_ENV) },
+        }
+        let enabled = env_flag(TEST_ENV);
+        unsafe {
+            env::remove_var(TEST_ENV);
+        }
+        enabled
     }
 
     #[test]
