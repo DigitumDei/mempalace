@@ -24,7 +24,7 @@ Cut a first Rust release with frozen schemas, known scope boundaries, passing ga
 
 ### 3. Packaging and Distribution
 
-- Build release artifacts on reference CI.
+- Build release artifacts on reference CI in a `glibc 2.36` packaging environment.
 - Validate installation and execution paths for supported targets from the produced artifacts.
 
 ### 4. Operator Documentation

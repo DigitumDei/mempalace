@@ -286,6 +286,8 @@ jobs:
   build-and-package:
     name: Build And Package
     runs-on: ubuntu-latest
+    container:
+      image: debian:12
     needs:
       - workspace-build
       - embeddings-tests
@@ -303,10 +305,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install protobuf compiler
+      - name: Install packaging dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+          apt-get update
+          apt-get install -y build-essential ca-certificates curl git pkg-config protobuf-compiler xz-utils
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

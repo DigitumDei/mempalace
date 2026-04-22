@@ -24,7 +24,8 @@ Reference packaging job:
 
 - GitHub Actions workflow: `.github/workflows/mempalace-rs-storage.yml`
 - Job: `build-and-package`
-- Runner: `ubuntu-latest`
+- Host: GitHub Actions `ubuntu-latest` runner with a `debian:12` job container
+- Packaging libc floor: `glibc 2.36`
 - Published artifact: `mempalace-release-binaries`
 
 ## Release Gate Rows
@@ -35,7 +36,7 @@ Rust v1 release signoff is split across two required rows:
 
 Host:
 
-- GitHub Actions `ubuntu-latest`
+- GitHub Actions `ubuntu-latest` runner with a `debian:12` job container (`glibc 2.36`)
 
 Required outcomes:
 
@@ -76,7 +77,7 @@ Minimum install validation for a candidate release:
 
 ## Validation Matrix
 
-### Expected on GitHub Actions `ubuntu-latest`
+### Expected on GitHub Actions packaging host
 
 - workspace build
 - per-crate unit and integration test jobs
@@ -117,5 +118,5 @@ Do not mark Rust v1 release-ready from this document alone.
 
 Use this directory to freeze the release promise, then attach both of the following before publishing a release tag:
 
-- evidence from a successful GitHub Actions `build-and-package` run on `ubuntu-latest`
+- evidence from a successful GitHub Actions `build-and-package` run in the `debian:12` packaging container
 - runtime acceptance evidence from the supported small VM using the exact uploaded release binaries

@@ -7,3 +7,4 @@ __pycache__/
 mempal.yaml
 .phase0_vendor/
 .claude/
+artifacts/
