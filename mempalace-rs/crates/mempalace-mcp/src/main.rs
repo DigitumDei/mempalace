@@ -30,8 +30,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
 }
 
-fn early_output(args: impl IntoIterator<Item = OsString>) -> Option<&'static str> {
-    let mut args = args.into_iter();
+fn early_output<I, S>(args: I) -> Option<&'static str>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+{
+    let mut args = args.into_iter().map(Into::into);
     let first = args.next()?;
     if args.next().is_some() {
         return None;
