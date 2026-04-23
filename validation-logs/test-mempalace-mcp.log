@@ -1,0 +1,256 @@
+   Compiling ort-sys v2.0.0-rc.11
+   Compiling mempalace-dialect v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-dialect)
+crates/mempalace-storage/src/engine.rs:10:32: warning: unused import: `DuplicateStrategy`
+crates/mempalace-storage/src/lance.rs:6:12: warning: unused import: `ArrayRef`
+crates/mempalace-storage/src/engine.rs:17:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/engine.rs:25:5: warning: missing documentation for an associated function
+crates/mempalace-storage/src/engine.rs:40:5: warning: missing documentation for a method
+crates/mempalace-storage/src/engine.rs:44:5: warning: missing documentation for a method
+crates/mempalace-storage/src/engine.rs:48:5: warning: missing documentation for a method
+crates/mempalace-storage/src/engine.rs:52:5: warning: missing documentation for a method
+crates/mempalace-storage/src/engine.rs:99:5: warning: missing documentation for a method
+crates/mempalace-storage/src/error.rs:5:1: warning: missing documentation for a type alias
+crates/mempalace-storage/src/error.rs:8:1: warning: missing documentation for an enum
+crates/mempalace-storage/src/error.rs:10:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:12:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:14:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:16:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:18:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:20:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:22:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:23:9: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:25:9: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:28:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:28:21: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:28:43: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:30:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:34:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:34:34: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:34:53: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:34:70: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:36:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/lance.rs:28:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/lance.rs:34:5: warning: missing documentation for an associated function
+crates/mempalace-storage/src/lance.rs:38:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:131:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/sqlite.rs:132:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:133:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:140:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:149:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:150:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:151:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:152:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:153:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:156:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/sqlite.rs:157:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:158:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:159:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:160:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:163:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/sqlite.rs:164:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:165:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:168:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/sqlite.rs:169:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:170:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:171:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:172:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:173:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:174:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:180:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:190:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/sqlite.rs:191:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:192:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:193:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:194:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:198:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/sqlite.rs:203:5: warning: missing documentation for an associated function
+crates/mempalace-storage/src/sqlite.rs:207:5: warning: missing documentation for an associated function
+crates/mempalace-storage/src/sqlite.rs:216:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:220:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:13:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:14:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:15:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:16:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:20:5: warning: missing documentation for an associated function
+crates/mempalace-storage/src/types.rs:27:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:28:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:29:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:30:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:31:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:32:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:36:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:37:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:38:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:39:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:40:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:44:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:45:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:46:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:50:1: warning: missing documentation for an enum
+crates/mempalace-storage/src/types.rs:51:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:52:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:53:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:58:1: warning: missing documentation for an enum
+crates/mempalace-storage/src/types.rs:59:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:60:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:61:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:65:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:75:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:76:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:77:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:78:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:79:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:80:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:81:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:82:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:86:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:87:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:88:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:89:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:90:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:91:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:95:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:96:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:97:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:98:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:99:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:100:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:101:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:105:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:106:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:107:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:111:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:112:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:113:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:114:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:115:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:116:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:117:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:121:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:122:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:123:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:124:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:125:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:129:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:130:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:131:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:132:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:136:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:137:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:138:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:139:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:140:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:142:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:144:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:145:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:146:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:147:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:148:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:149:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:153:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:154:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:155:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:159:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:160:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:161:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:162:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:166:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/types.rs:167:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:168:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:173:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:174:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:175:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:176:5: warning: missing documentation for a method
+warning: `mempalace-storage` (lib) generated 161 warnings (run `cargo fix --lib -p mempalace-storage` to apply 2 suggestions)
+   Compiling mempalace-graph v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-graph)
+   Compiling ort v2.0.0-rc.11
+   Compiling fastembed v5.13.2
+   Compiling mempalace-embeddings v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-embeddings)
+crates/mempalace-embeddings/src/lib.rs:162:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:163:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:164:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:165:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:178:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:239:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:240:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:241:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:258:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:259:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:260:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:261:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:681:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:683:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:685:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:685:22: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:687:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:687:22: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:687:40: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:689:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:689:15: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:689:33: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:691:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:692:9: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:694:9: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:697:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:697:25: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:697:42: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:699:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:701:5: warning: missing documentation for a variant
+   Compiling mempalace-search v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-search)
+warning: `mempalace-embeddings` (lib) generated 30 warnings
+   Compiling mempalace-mcp v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-mcp)
+crates/mempalace-mcp/src/lib.rs:9:38: warning: unused import: `LowCpuRuntimeConfig`
+warning: `mempalace-mcp` (lib) generated 1 warning (run `cargo fix --lib -p mempalace-mcp` to apply 1 suggestion)
+crates/mempalace-mcp/tests/stdio_harness.rs:1:1: warning: missing documentation for the crate
+warning: `mempalace-mcp` (test "stdio_harness") generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 51.77s
+     Running unittests src/lib.rs (target/debug/deps/mempalace_mcp-97f1e80003055402)
+
+running 22 tests
+test tests::entity_kind_heuristic_prefers_unknown_over_false_people ... ok
+test tests::initialize_matches_phase0_contract_shape ... ok
+test tests::invalid_direction_returns_invalid_params ... ok
+test tests::kg_add_accepts_and_round_trips_freeform_source_closet ... ok
+test tests::queue_limit_rejects_excess_concurrent_requests ... ok
+test tests::duplicate_check_uses_semantic_scores_even_when_rerank_is_enabled ... ok
+test tests::diary_read_filters_primary_wing_entries_by_agent_name ... ok
+test tests::diary_tools_round_trip_entries ... ok
+test tests::diary_read_falls_back_to_legacy_collapsed_wing_name ... ok
+test tests::diary_read_falls_back_when_primary_wing_has_no_diary_entries ... ok
+test tests::concurrent_tool_writes_serialize_without_corruption ... ok
+test tests::tool_inventory_matches_phase0_fixture ... ok
+test tests::knowledge_graph_tools_cover_add_query_invalidate_timeline_and_stats ... ok
+test tests::serve_transport_processes_tool_calls_and_ignores_notifications ... ok
+test tests::status_tool_reports_protocol_and_counts ... ok
+test tests::search_tool_clamps_results_under_low_cpu_config ... ok
+test tests::diary_read_merges_primary_and_legacy_history_without_cross_agent_collisions ... ok
+test tests::unknown_tool_uses_phase0_error_code ... ok
+test tests::search_tool_returns_similarity_scores ... ok
+test tests::diary_tools_preserve_allowed_punctuation_in_wing_ids ... ok
+test tests::taxonomy_listing_and_graph_tools_cover_seeded_data ... ok
+test tests::add_delete_and_duplicate_tools_cover_write_path ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.57s
+
+     Running unittests src/main.rs (target/debug/deps/mempalace_mcp-9ab7a370a8ad9e5c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stdio_harness.rs (target/debug/deps/stdio_harness-e7e25f262574cc40)
+
+running 4 tests
+test server_returns_parse_error_for_invalid_json ... ok
+test server_handles_initialize_and_tools_list_over_transport ... ok
+test server_handles_embedding_backed_tool_calls_over_transport ... ok
+test compiled_binary_serves_stdio_with_stub_embeddings ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+
+   Doc-tests mempalace_mcp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

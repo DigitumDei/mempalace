@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use mempalace_core::EmbeddingProfile;
 use mempalace_embeddings::{
-    EmbeddingBenchmark, EmbeddingRequest, FastembedProvider, FastembedProviderConfig,
+    EmbeddingBenchmark, EmbeddingRequest, FastembedProvider, FastembedProviderConfig, env_flag,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,10 +40,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn default_cache_root() -> PathBuf {
     PathBuf::from(".cache").join("mempalace").join("embeddings")
-}
-
-fn env_flag(name: &str) -> bool {
-    env::var(name)
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(false)
 }

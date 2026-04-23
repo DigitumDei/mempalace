@@ -1,0 +1,6 @@
+mempalace-embeddings EXIT=0
+mempalace-storage EXIT=0
+mempalace-ingest EXIT=0
+mempalace-graph EXIT=0
+mempalace-mcp EXIT=0
+mempalace-cli EXIT=0

@@ -252,6 +252,15 @@ impl FastembedProviderConfig {
     }
 }
 
+/// Returns true only for explicit truthy environment values.
+pub fn env_flag(name: &str) -> bool {
+    env::var(name).map(|v| env_flag_value(&v)).unwrap_or(false)
+}
+
+fn env_flag_value(value: &str) -> bool {
+    matches!(value, "1" | "true" | "TRUE" | "yes" | "YES")
+}
+
 /// Resolved profile details used by the runtime and validation layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedEmbeddingProfile {
@@ -707,9 +716,10 @@ mod tests {
     use super::{
         EmbeddingBenchmark, EmbeddingError, EmbeddingProvider, EmbeddingRequest, EmbeddingResponse,
         FastembedProvider, FastembedProviderConfig, ResolvedEmbeddingProfile,
-        StartupValidationStatus, build_init_options, effective_cache_root_from_hf_home,
-        percentile_millis, resolve_fastembed_model_layout, validate_cache,
+        StartupValidationStatus, build_init_options, effective_cache_root_from_hf_home, env_flag,
+        env_flag_value, percentile_millis, resolve_fastembed_model_layout, validate_cache,
     };
+    use std::env;
     use std::fs;
     use std::path::Path;
     use std::time::Duration;
@@ -917,6 +927,21 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.status, StartupValidationStatus::MissingAssets);
+    }
+
+    #[test]
+    fn env_flag_accepts_only_explicit_truthy_values() {
+        assert!(!env_flag_value("0"));
+        assert!(!env_flag_value("false"));
+        assert!(!env_flag_value("no"));
+        assert!(!env_flag_value(""));
+        assert!(env_flag_value("1"));
+        assert!(env_flag_value("true"));
+        assert!(env_flag_value("TRUE"));
+        assert!(env_flag_value("yes"));
+        assert!(env_flag_value("YES"));
+        // Absent env var resolves to false.
+        assert!(!env_flag("MEMPALACE_EMBEDDINGS_ENV_FLAG_TEST_ABSENT_XYZ"));
     }
 
     #[test]
