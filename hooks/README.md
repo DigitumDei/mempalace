@@ -35,7 +35,7 @@ The init hook goes in **`~/.claude/settings.json`** (user-level, applies to all 
     "UserPromptSubmit": [{
       "hooks": [{
         "type": "command",
-        "command": "/absolute/path/to/hooks/mempalace-init-hook.sh"
+        "command": "/Users/YOU/.claude/mempalace-init-hook.sh"
       }]
     }]
   }
@@ -140,7 +140,7 @@ User sends first message of session → Claude Code fires UserPromptSubmit hook
                                                 ↓
                                     Hook reads session_id from input JSON
                                                 ↓
-                              ┌─── /tmp/claude-mp-<id> exists ──→ echo "" (no-op)
+                              ┌─── /tmp/claude-mp-<id> exists ──→ echo "{}" (no-op)
                               │
                               └─── marker absent ──→ touch marker
                                                           ↓
@@ -213,7 +213,7 @@ ls /tmp/claude-mp-*
 
 If the marker exists but orientation didn't happen, the hook ran but the AI may have skipped the injected context. Try starting a fresh session (new marker = fresh trigger).
 
-If orientation never fires at all, verify `jq` is installed — the hook uses it to parse the session ID from the input JSON.
+If orientation never fires at all, verify the script is executable and the path in your settings is correct.
 
 ## Cost
 
