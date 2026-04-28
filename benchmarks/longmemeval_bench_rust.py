@@ -175,9 +175,12 @@ def rust_query(entry, rust_binary: str, n_results=10):
             subprocess.run(
                 [
                     rust_binary,
-                    "--palace", str(palace_dir),
-                    "mine", str(sessions_dir),
-                    "--mode", "projects",
+                    "--palace",
+                    str(palace_dir),
+                    "mine",
+                    str(sessions_dir),
+                    "--mode",
+                    "projects",
                 ],
                 capture_output=True,
                 check=True,
@@ -194,9 +197,12 @@ def rust_query(entry, rust_binary: str, n_results=10):
             result = subprocess.run(
                 [
                     rust_binary,
-                    "--palace", str(palace_dir),
-                    "search", entry["question"],
-                    "--results", str(n_results),
+                    "--palace",
+                    str(palace_dir),
+                    "search",
+                    entry["question"],
+                    "--results",
+                    str(n_results),
                 ],
                 capture_output=True,
                 text=True,
@@ -293,20 +299,22 @@ def run_benchmark(data_path: str, args):
             rs_ingest_total += rs_ing
             rs_search_total += rs_srch
 
-        results_log.append({
-            "idx": idx,
-            "question_id": entry.get("question_id", idx),
-            "question_type": qtype,
-            "correct_ids": correct_ids,
-            "py_ranked_ids": py_ranked[:10],
-            "rs_ranked_ids": rs_ranked[:10],
-            "py_r5": recall_at_k(py_ranked, correct_ids, 5) if not args.rust_only else None,
-            "rs_r5": recall_at_k(rs_ranked, correct_ids, 5) if not args.python_only else None,
-            "py_ingest_ms": round(py_ing * 1000, 1),
-            "rs_ingest_ms": round(rs_ing * 1000, 1),
-            "py_search_ms": round(py_srch * 1000, 1),
-            "rs_search_ms": round(rs_srch * 1000, 1),
-        })
+        results_log.append(
+            {
+                "idx": idx,
+                "question_id": entry.get("question_id", idx),
+                "question_type": qtype,
+                "correct_ids": correct_ids,
+                "py_ranked_ids": py_ranked[:10],
+                "rs_ranked_ids": rs_ranked[:10],
+                "py_r5": recall_at_k(py_ranked, correct_ids, 5) if not args.rust_only else None,
+                "rs_r5": recall_at_k(rs_ranked, correct_ids, 5) if not args.python_only else None,
+                "py_ingest_ms": round(py_ing * 1000, 1),
+                "rs_ingest_ms": round(rs_ing * 1000, 1),
+                "py_search_ms": round(py_srch * 1000, 1),
+                "rs_search_ms": round(rs_srch * 1000, 1),
+            }
+        )
 
         # Progress every 10 questions
         if (idx + 1) % 10 == 0 or idx == n - 1:
@@ -315,8 +323,8 @@ def run_benchmark(data_path: str, args):
             rs_pct = f"{rs_r5 / done:.1%}" if not args.python_only else "—"
             print(
                 f"  [{done:4d}/{n}]  Py R@5={py_pct}  Rs R@5={rs_pct}"
-                f"  Py {py_ing*1000:.0f}ms/{py_srch*1000:.0f}ms"
-                f"  Rs {rs_ing*1000:.0f}ms/{rs_srch*1000:.0f}ms"
+                f"  Py {py_ing * 1000:.0f}ms/{py_srch * 1000:.0f}ms"
+                f"  Rs {rs_ing * 1000:.0f}ms/{rs_srch * 1000:.0f}ms"
             )
 
     # ── Summary ───────────────────────────────────────────────────────────────
@@ -382,7 +390,9 @@ def main():
     parser = argparse.ArgumentParser(description="LongMemEval Python vs Rust benchmark")
     parser.add_argument("data", help="Path to longmemeval_s_cleaned.json")
     parser.add_argument("--limit", type=int, default=0, help="Number of questions to run (0 = all)")
-    parser.add_argument("--rust-binary", default=_DEFAULT_BINARY, help="Path to mempalace-cli binary")
+    parser.add_argument(
+        "--rust-binary", default=_DEFAULT_BINARY, help="Path to mempalace-cli binary"
+    )
     parser.add_argument("--rust-only", action="store_true", help="Skip Python baseline")
     parser.add_argument("--python-only", action="store_true", help="Skip Rust benchmark")
     args = parser.parse_args()
@@ -397,7 +407,9 @@ def main():
                 f"Build it with: cargo build --release -p mempalace-cli\n"
                 f"Or pass --rust-binary /path/to/mempalace-cli"
             )
-        print(f"Rust binary: {args.rust_binary} ({Path(args.rust_binary).stat().st_size // 1_000_000}MB)")
+        print(
+            f"Rust binary: {args.rust_binary} ({Path(args.rust_binary).stat().st_size // 1_000_000}MB)"
+        )
 
     run_benchmark(args.data, args)
 
