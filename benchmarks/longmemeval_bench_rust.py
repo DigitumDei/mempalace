@@ -256,7 +256,7 @@ def run_benchmark(data_path: str, args):
 
     n = len(entries)
     print(f"\nLongMemEval Python vs Rust — {n} questions")
-    print(f"  Python:  ChromaDB in-memory, raw user turns")
+    print("  Python:  ChromaDB in-memory, raw user turns")
     print(f"  Rust:    {args.rust_binary}")
     print()
 
@@ -327,7 +327,7 @@ def run_benchmark(data_path: str, args):
     print()
 
     if not args.rust_only:
-        print(f"  Python (ChromaDB):")
+        print("  Python (ChromaDB):")
         print(f"    Recall@5:       {py_r5 / n:.3f}  ({py_r5:.0f}/{n})")
         print(f"    Recall@10:      {py_r10 / n:.3f}  ({py_r10:.0f}/{n})")
         print(f"    NDCG@10:        {py_ndcg / n:.3f}")
@@ -337,7 +337,7 @@ def run_benchmark(data_path: str, args):
         print()
 
     if not args.python_only:
-        print(f"  Rust (mempalace-cli):")
+        print("  Rust (mempalace-cli):")
         print(f"    Recall@5:       {rs_r5 / n:.3f}  ({rs_r5:.0f}/{n})")
         print(f"    Recall@10:      {rs_r10 / n:.3f}  ({rs_r10:.0f}/{n})")
         print(f"    NDCG@10:        {rs_ndcg / n:.3f}")
@@ -347,12 +347,12 @@ def run_benchmark(data_path: str, args):
         print()
 
     if not args.rust_only and not args.python_only:
-        print(f"  Quality delta (Rust - Python):")
+        print("  Quality delta (Rust - Python):")
         print(f"    ΔRecall@5:      {(rs_r5 - py_r5) / n:+.3f}")
         print(f"    ΔRecall@10:     {(rs_r10 - py_r10) / n:+.3f}")
         print(f"    ΔNDCG@10:       {(rs_ndcg - py_ndcg) / n:+.3f}")
         print()
-        print(f"  Speed delta (Rust / Python — lower is faster for Rust):")
+        print("  Speed delta (Rust / Python — lower is faster for Rust):")
         if py_ingest_total > 0:
             print(f"    Ingest ratio:   {rs_ingest_total / py_ingest_total:.2f}x")
         if py_search_total > 0:
