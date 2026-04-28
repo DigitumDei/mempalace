@@ -1,0 +1,231 @@
+################################################################
+### 1. mempalace-cli --help
+### $ /mnt/d/SourceCode/mempalace/mempalace-rs/target/release/mempalace-cli --help
+################################################################
+MemPalace — Give your AI a memory. No API key required.
+
+Usage: mempalace-cli [OPTIONS] [COMMAND]
+
+Commands:
+  init      Detect rooms from your folder structure
+  mine      Mine files into the palace
+  search    Find anything, exact words
+  status    Show what's been filed
+  wake-up   Show L0 + L1 wake-up context
+  split     Deferred in Rust Phase 9. See the linked decision record
+  compress  Deferred in Rust Phase 9. See the linked decision record
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --palace <PATH>  Where the palace lives (default: from ~/.mempalace/config.json or ~/.mempalace/palace)
+  -h, --help           Print help
+  -V, --version        Print version
+### EXIT=0
+
+################################################################
+### 2. mempalace-cli init
+### $ /mnt/d/SourceCode/mempalace/mempalace-rs/target/release/mempalace-cli --palace /home/coolmac/.mempalace-smoke/palace init --yes /home/coolmac/.mempalace-smoke/fixture
+################################################################
+[2m2026-04-21T04:36:04.226035Z[0m [32m INFO[0m embedding startup validation completed [3membedding_model[0m[2m=[0m"sentence-transformers/all-MiniLM-L6-v2" [3mcache_root[0m[2m=[0m/home/coolmac/.mempalace-smoke/cache/mempalace/embeddings [3mstartup_validation[0m[2m=[0mready [3mdetail[0m[2m=[0m"warm cache detected for sentence-transformers/all-MiniLM-L6-v2"
+
+=======================================================
+  MemPalace Init — Local setup
+=======================================================
+
+  WING: fixture
+  (3 files found, rooms detected from folder structure)
+
+    ROOM: documentation
+          Files from notes/
+    ROOM: general
+          Files that don't fit other rooms
+    ROOM: planning
+          Files from planning/
+
+───────────────────────────────────────────────────────
+  Config saved: /home/coolmac/.mempalace-smoke/fixture/mempalace.yaml
+  Palace path: /home/coolmac/.mempalace-smoke/palace
+  Startup validation: ready
+  Global config: /home/coolmac/.mempalace-smoke/config/.mempalace/config.json
+  Next step:
+    mempalace-cli mine /home/coolmac/.mempalace-smoke/fixture
+
+=======================================================
+### EXIT=0
+
+################################################################
+### 3. mempalace-cli mine
+### $ /mnt/d/SourceCode/mempalace/mempalace-rs/target/release/mempalace-cli --palace /home/coolmac/.mempalace-smoke/palace mine /home/coolmac/.mempalace-smoke/fixture
+################################################################
+[2m2026-04-21T04:36:04.432136Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mstatus[0m[2m=[0m"error"
+[2m2026-04-21T04:36:04.433434Z[0m [32m INFO[0m [3mevent[0m[2m=[0m"writing" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mmode[0m[2m=[0mCreate
+[2m2026-04-21T04:36:04.439864Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mstatus[0m[2m=[0m"error"
+[2m2026-04-21T04:36:04.452926Z[0m [32m INFO[0m [3mmode[0m[2m=[0m"create" [3mtype[0m[2m=[0m"manifest" [3mpath[0m[2m=[0m"dummy"
+[2m2026-04-21T04:36:04.456480Z[0m [32m INFO[0m [3mevent[0m[2m=[0m"committed" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mread_version[0m[2m=[0m0 [3mcommitted_version[0m[2m=[0m1 [3mdetached[0m[2m=[0mfalse [3moperation[0m[2m=[0m"Overwrite"
+[2m2026-04-21T04:36:04.508743Z[0m [32m INFO[0m [1mexecute[0m[2m:[0m [3mmode[0m[2m=[0m"create" [3mtype[0m[2m=[0m"manifest" [3mpath[0m[2m=[0m"dummy"
+[2m2026-04-21T04:36:04.512349Z[0m [32m INFO[0m [1mexecute[0m[2m:[0m [3mmode[0m[2m=[0m"create" [3mtype[0m[2m=[0m"manifest" [3mpath[0m[2m=[0m"dummy"
+[2m2026-04-21T04:36:04.514105Z[0m [32m INFO[0m [1mexecute[0m[2m:[0m [3mmode[0m[2m=[0m"create" [3mtype[0m[2m=[0m"manifest" [3mpath[0m[2m=[0m"dummy"
+[2m2026-04-21T04:36:04.522056Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m4 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:04.627471Z[0m [32m INFO[0m [1mDatasetRecordBatchStream[0m[2m:[0m [3mtype[0m[2m=[0m"plan_run" [3mplan_summary[0m[2m=[0m"FilteredRead" [3moutput_rows[0m[2m=[0m0 [3miops[0m[2m=[0m0 [3mrequests[0m[2m=[0m0 [3mbytes_read[0m[2m=[0m0 [3mindices_loaded[0m[2m=[0m0 [3mparts_loaded[0m[2m=[0m0 [3mindex_comparisons[0m[2m=[0m0
+[2m2026-04-21T04:36:05.052354Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m4 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:05.089567Z[0m [32m INFO[0m [1mDatasetRecordBatchStream[0m[2m:[0m [3mtype[0m[2m=[0m"plan_run" [3mplan_summary[0m[2m=[0m"Projection(Take(CoalesceBatches(FilteredRead)))" [3moutput_rows[0m[2m=[0m0 [3miops[0m[2m=[0m0 [3mrequests[0m[2m=[0m0 [3mbytes_read[0m[2m=[0m0 [3mindices_loaded[0m[2m=[0m0 [3mparts_loaded[0m[2m=[0m0 [3mindex_comparisons[0m[2m=[0m0
+[2m2026-04-21T04:36:05.090217Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m4 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:05.091666Z[0m [32m INFO[0m [3mevent[0m[2m=[0m"writing" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mmode[0m[2m=[0mAppend
+[2m2026-04-21T04:36:05.100803Z[0m [32m INFO[0m [3mmode[0m[2m=[0m"create" [3mtype[0m[2m=[0m"data" [3mpath[0m[2m=[0m"1101111000010011001001101f95ac47a88efc49f9d635113f.lance"
+[2m2026-04-21T04:36:05.102341Z[0m [32m INFO[0m [3mmode[0m[2m=[0m"create" [3mtype[0m[2m=[0m"manifest" [3mpath[0m[2m=[0m"dummy"
+[2m2026-04-21T04:36:05.102912Z[0m [32m INFO[0m [3mevent[0m[2m=[0m"committed" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mread_version[0m[2m=[0m4 [3mcommitted_version[0m[2m=[0m5 [3mdetached[0m[2m=[0mfalse [3moperation[0m[2m=[0m"Append"
+[2m2026-04-21T04:36:05.105788Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"43528b21-7f00-444c-ba48-701c670bf410" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:05.109435Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"47c386cd-e96e-4f07-83da-e7ffb1c1997c" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:05.110226Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"208523df-32a3-4b69-b939-37bdd9d8c5f5" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:05.138087Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m5 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:05.171051Z[0m [32m INFO[0m [1mDatasetRecordBatchStream[0m[2m:[0m [3mtype[0m[2m=[0m"plan_run" [3mplan_summary[0m[2m=[0m"Projection(Take(CoalesceBatches(FilteredRead)))" [3moutput_rows[0m[2m=[0m0 [3miops[0m[2m=[0m0 [3mrequests[0m[2m=[0m0 [3mbytes_read[0m[2m=[0m0 [3mindices_loaded[0m[2m=[0m0 [3mparts_loaded[0m[2m=[0m0 [3mindex_comparisons[0m[2m=[0m0
+[2m2026-04-21T04:36:05.172059Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m5 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:05.172585Z[0m [32m INFO[0m [3mevent[0m[2m=[0m"writing" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mmode[0m[2m=[0mAppend
+[2m2026-04-21T04:36:05.173460Z[0m [32m INFO[0m [3mmode[0m[2m=[0m"create" [3mtype[0m[2m=[0m"data" [3mpath[0m[2m=[0m"01011101000101110000100001d3e84f22af3509fe7a298d6e.lance"
+[2m2026-04-21T04:36:05.174137Z[0m [32m INFO[0m [3mmode[0m[2m=[0m"create" [3mtype[0m[2m=[0m"manifest" [3mpath[0m[2m=[0m"dummy"
+[2m2026-04-21T04:36:05.174478Z[0m [32m INFO[0m [3mevent[0m[2m=[0m"committed" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mread_version[0m[2m=[0m5 [3mcommitted_version[0m[2m=[0m6 [3mdetached[0m[2m=[0mfalse [3moperation[0m[2m=[0m"Append"
+[2m2026-04-21T04:36:05.175246Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"43528b21-7f00-444c-ba48-701c670bf410" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:05.176042Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"47c386cd-e96e-4f07-83da-e7ffb1c1997c" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:05.176787Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"208523df-32a3-4b69-b939-37bdd9d8c5f5" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:05.203178Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m6 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:05.224903Z[0m [32m INFO[0m [1mDatasetRecordBatchStream[0m[2m:[0m [3mtype[0m[2m=[0m"plan_run" [3mplan_summary[0m[2m=[0m"Projection(Take(CoalesceBatches(FilteredRead)))" [3moutput_rows[0m[2m=[0m0 [3miops[0m[2m=[0m0 [3mrequests[0m[2m=[0m0 [3mbytes_read[0m[2m=[0m0 [3mindices_loaded[0m[2m=[0m0 [3mparts_loaded[0m[2m=[0m0 [3mindex_comparisons[0m[2m=[0m0
+[2m2026-04-21T04:36:05.225857Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m6 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:05.226329Z[0m [32m INFO[0m [3mevent[0m[2m=[0m"writing" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mmode[0m[2m=[0mAppend
+[2m2026-04-21T04:36:05.227073Z[0m [32m INFO[0m [3mmode[0m[2m=[0m"create" [3mtype[0m[2m=[0m"data" [3mpath[0m[2m=[0m"111101001110010110111100aabbd944de8426f90ba3a6c481.lance"
+[2m2026-04-21T04:36:05.227801Z[0m [32m INFO[0m [3mmode[0m[2m=[0m"create" [3mtype[0m[2m=[0m"manifest" [3mpath[0m[2m=[0m"dummy"
+[2m2026-04-21T04:36:05.228137Z[0m [32m INFO[0m [3mevent[0m[2m=[0m"committed" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mread_version[0m[2m=[0m6 [3mcommitted_version[0m[2m=[0m7 [3mdetached[0m[2m=[0mfalse [3moperation[0m[2m=[0m"Append"
+[2m2026-04-21T04:36:05.228879Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"43528b21-7f00-444c-ba48-701c670bf410" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:05.229800Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"47c386cd-e96e-4f07-83da-e7ffb1c1997c" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:05.230564Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"208523df-32a3-4b69-b939-37bdd9d8c5f5" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+
+============================================================
+  Mine complete
+============================================================
+  Mode: projects
+  Source: /home/coolmac/.mempalace-smoke/fixture
+  Palace: /home/coolmac/.mempalace-smoke/palace
+  Dry run: no
+  Files discovered: 3
+  Files ignored: 1
+  Files unreadable: 0
+  Files malformed: 0
+  Files skipped unchanged: 0
+  Files ingested: 3
+  Drawers written: 3
+  Files truncated: 0
+============================================================
+### EXIT=0
+
+################################################################
+### 4. mempalace-cli search
+### $ /mnt/d/SourceCode/mempalace/mempalace-rs/target/release/mempalace-cli --palace /home/coolmac/.mempalace-smoke/palace search roadmap
+################################################################
+[2m2026-04-21T04:36:05.471884Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:05.473062Z[0m [32m INFO[0m [3mevent[0m[2m=[0m"writing" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mmode[0m[2m=[0mCreate
+[2m2026-04-21T04:36:05.476400Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:05.501390Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"43528b21-7f00-444c-ba48-701c670bf410" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:05.512859Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"47c386cd-e96e-4f07-83da-e7ffb1c1997c" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:05.513729Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"208523df-32a3-4b69-b939-37bdd9d8c5f5" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:05.519880Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:05.636574Z[0m [32m INFO[0m [1mDatasetRecordBatchStream[0m[2m:[0m [3mtype[0m[2m=[0m"plan_run" [3mplan_summary[0m[2m=[0m"FilteredRead" [3moutput_rows[0m[2m=[0m3 [3miops[0m[2m=[0m66 [3mrequests[0m[2m=[0m72 [3mbytes_read[0m[2m=[0m17976 [3mindices_loaded[0m[2m=[0m0 [3mparts_loaded[0m[2m=[0m0 [3mindex_comparisons[0m[2m=[0m0
+[2m2026-04-21T04:36:06.010506Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:06.059950Z[0m [32m INFO[0m [1mDatasetRecordBatchStream[0m[2m:[0m [3mtype[0m[2m=[0m"plan_run" [3mplan_summary[0m[2m=[0m"Projection(Take(CoalesceBatches(GlobalLimit(LanceFilter(SortExec(TopK)(KNNVectorDistance(FilteredRead)))))))" [3moutput_rows[0m[2m=[0m3 [3miops[0m[2m=[0m6 [3mrequests[0m[2m=[0m6 [3mbytes_read[0m[2m=[0m16896 [3mindices_loaded[0m[2m=[0m0 [3mparts_loaded[0m[2m=[0m0 [3mindex_comparisons[0m[2m=[0m0
+
+============================================================
+  Results for: "roadmap"
+============================================================
+
+  [1] fixture / planning
+      Source: roadmap.md
+      Match:  -0.327
+
+      # Roadmap
+      
+      Phase 12 release readiness covers final validation, packaging, and operator documentation.
+
+  ────────────────────────────────────────────────────────
+  [2] fixture / general
+      Source: overview.md
+      Match:  -0.608
+
+      # Overview
+      
+      The mempalace smoke test exercises init, mine, search, status, and wake-up on a fresh palace.
+      It ingests a handful of markdown files to verify end-to-end behavior.
+
+  ────────────────────────────────────────────────────────
+  [3] fixture / general
+      Source: welcome.md
+      Match:  -0.764
+
+      # Welcome
+      
+      This is the welcome note for the smoke test fixture. It introduces the project.
+
+  ────────────────────────────────────────────────────────
+### EXIT=0
+
+################################################################
+### 5. mempalace-cli status
+### $ /mnt/d/SourceCode/mempalace/mempalace-rs/target/release/mempalace-cli --palace /home/coolmac/.mempalace-smoke/palace status
+################################################################
+[2m2026-04-21T04:36:06.313326Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:06.314818Z[0m [32m INFO[0m [3mevent[0m[2m=[0m"writing" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mmode[0m[2m=[0mCreate
+[2m2026-04-21T04:36:06.317823Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:06.343387Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"43528b21-7f00-444c-ba48-701c670bf410" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:06.354767Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"47c386cd-e96e-4f07-83da-e7ffb1c1997c" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:06.355672Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"208523df-32a3-4b69-b939-37bdd9d8c5f5" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:06.362451Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:06.486654Z[0m [32m INFO[0m [1mDatasetRecordBatchStream[0m[2m:[0m [3mtype[0m[2m=[0m"plan_run" [3mplan_summary[0m[2m=[0m"FilteredRead" [3moutput_rows[0m[2m=[0m3 [3miops[0m[2m=[0m66 [3mrequests[0m[2m=[0m72 [3mbytes_read[0m[2m=[0m17976 [3mindices_loaded[0m[2m=[0m0 [3mparts_loaded[0m[2m=[0m0 [3mindex_comparisons[0m[2m=[0m0
+[2m2026-04-21T04:36:06.488032Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:06.497537Z[0m [32m INFO[0m [1mDatasetRecordBatchStream[0m[2m:[0m [3mtype[0m[2m=[0m"plan_run" [3mplan_summary[0m[2m=[0m"FilteredRead" [3moutput_rows[0m[2m=[0m3 [3miops[0m[2m=[0m66 [3mrequests[0m[2m=[0m72 [3mbytes_read[0m[2m=[0m17976 [3mindices_loaded[0m[2m=[0m0 [3mparts_loaded[0m[2m=[0m0 [3mindex_comparisons[0m[2m=[0m0
+
+=======================================================
+  MemPalace Status — 3 drawers
+=======================================================
+
+  WING: fixture
+    ROOM: general                  2 drawers
+    ROOM: planning                 1 drawers
+
+=======================================================
+### EXIT=0
+
+################################################################
+### 6. mempalace-cli wake-up
+### $ /mnt/d/SourceCode/mempalace/mempalace-rs/target/release/mempalace-cli --palace /home/coolmac/.mempalace-smoke/palace wake-up
+################################################################
+[2m2026-04-21T04:36:06.710478Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:06.711804Z[0m [32m INFO[0m [3mevent[0m[2m=[0m"writing" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mmode[0m[2m=[0mCreate
+[2m2026-04-21T04:36:06.715484Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:06.740194Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"43528b21-7f00-444c-ba48-701c670bf410" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:06.752196Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"47c386cd-e96e-4f07-83da-e7ffb1c1997c" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:06.752991Z[0m [32m INFO[0m [3mindex_uuid[0m[2m=[0m"208523df-32a3-4b69-b939-37bdd9d8c5f5" [3mtype[0m[2m=[0m"open_scalar_index" [3mindex_type[0m[2m=[0m"BTree"
+[2m2026-04-21T04:36:06.759406Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:06.889644Z[0m [32m INFO[0m [1mDatasetRecordBatchStream[0m[2m:[0m [3mtype[0m[2m=[0m"plan_run" [3mplan_summary[0m[2m=[0m"FilteredRead" [3moutput_rows[0m[2m=[0m3 [3miops[0m[2m=[0m66 [3mrequests[0m[2m=[0m72 [3mbytes_read[0m[2m=[0m17976 [3mindices_loaded[0m[2m=[0m0 [3mparts_loaded[0m[2m=[0m0 [3mindex_comparisons[0m[2m=[0m0
+[2m2026-04-21T04:36:07.274254Z[0m [32m INFO[0m [1mload[0m[2m:[0m [3mevent[0m[2m=[0m"loading" [3muri[0m[2m=[0m"/home/coolmac/.mempalace-smoke/palace/lancedb/drawers.lance" [3mtarget_ref[0m[2m=[0mNone [3mversion[0m[2m=[0m7 [3mstatus[0m[2m=[0m"success"
+[2m2026-04-21T04:36:07.281154Z[0m [32m INFO[0m [1mDatasetRecordBatchStream[0m[2m:[0m [3mtype[0m[2m=[0m"plan_run" [3mplan_summary[0m[2m=[0m"FilteredRead" [3moutput_rows[0m[2m=[0m3 [3miops[0m[2m=[0m66 [3mrequests[0m[2m=[0m72 [3mbytes_read[0m[2m=[0m17976 [3mindices_loaded[0m[2m=[0m0 [3mparts_loaded[0m[2m=[0m0 [3mindex_comparisons[0m[2m=[0m0
+Wake-up text (~135 tokens):
+==================================================
+## L0 — IDENTITY
+No identity configured. Create ~/.mempalace/identity.txt
+
+## L1 — ESSENTIAL STORY
+
+[general]
+  - # Welcome This is the welcome note for the smoke test fixture. It introduces the project.  (welcome.md)
+  - # Overview The mempalace smoke test exercises init, mine, search, status, and wake-up on a fresh palace. It ingests a handful of markdown files to verify end-to-end behavior.  (overview.md)
+
+[planning]
+  - # Roadmap Phase 12 release readiness covers final validation, packaging, and operator documentation.  (roadmap.md)
+### EXIT=0
+
+################################################################
+### 7. mempalace-mcp initialize + tools/list (stdio)
+################################################################
+{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2024-11-05","serverInfo":{"name":"mempalace","version":"2.0.0"}}}
+{"id":2,"jsonrpc":"2.0","result":{"tools":[{"description":"Palace overview — total drawers, wing and room counts","inputSchema":{"properties":{},"type":"object"},"name":"mempalace_status"},{"description":"List all wings with drawer counts","inputSchema":{"properties":{},"type":"object"},"name":"mempalace_list_wings"},{"description":"List rooms within a wing (or all rooms if no wing given)","inputSchema":{"properties":{"wing":{"description":"Wing to list rooms for (optional)","type":"string"}},"type":"object"},"name":"mempalace_list_rooms"},{"description":"Full taxonomy: wing → room → drawer count","inputSchema":{"properties":{},"type":"object"},"name":"mempalace_get_taxonomy"},{"description":"Get the AAAK dialect specification — the compressed memory format MemPalace uses. Call this if you need to read or write AAAK-compressed memories.","inputSchema":{"properties":{},"type":"object"},"name":"mempalace_get_aaak_spec"},{"description":"Query the knowledge graph for an entity's relationships. Returns typed facts with temporal validity. E.g. 'Max' → child_of Alice, loves chess, does swimming. Filter by date with as_of to see what was true at a point in time.","inputSchema":{"properties":{"as_of":{"description":"Date filter — only facts valid at this date (YYYY-MM-DD, optional)","type":"string"},"direction":{"description":"outgoing (entity→?), incoming (?→entity), or both (default: both)","type":"string"},"entity":{"description":"Entity to query (e.g. 'Max', 'MyProject', 'Alice')","type":"string"}},"required":["entity"],"type":"object"},"name":"mempalace_kg_query"},{"description":"Add a fact to the knowledge graph. Subject → predicate → object with optional time window. E.g. ('Max', 'started_school', 'Year 7', valid_from='2026-09-01').","inputSchema":{"properties":{"object":{"description":"The entity being connected to","type":"string"},"predicate":{"description":"The relationship type (e.g. 'loves', 'works_on', 'daughter_of')","type":"string"},"source_closet":{"description":"Closet ID where this fact appears (optional)","type":"string"},"subject":{"description":"The entity doing/being something","type":"string"},"valid_from":{"description":"When this became true (YYYY-MM-DD, optional)","type":"string"}},"required":["subject","predicate","object"],"type":"object"},"name":"mempalace_kg_add"},{"description":"Mark a fact as no longer true. E.g. ankle injury resolved, job ended, moved house.","inputSchema":{"properties":{"ended":{"description":"When it stopped being true (YYYY-MM-DD, default: today)","type":"string"},"object":{"description":"Connected entity","type":"string"},"predicate":{"description":"Relationship","type":"string"},"subject":{"description":"Entity","type":"string"}},"required":["subject","predicate","object"],"type":"object"},"name":"mempalace_kg_invalidate"},{"description":"Chronological timeline of facts. Shows the story of an entity (or everything) in order.","inputSchema":{"properties":{"entity":{"description":"Entity to get timeline for (optional — omit for full timeline)","type":"string"}},"type":"object"},"name":"mempalace_kg_timeline"},{"description":"Knowledge graph overview: entities, triples, current vs expired facts, relationship types.","inputSchema":{"properties":{},"type":"object"},"name":"mempalace_kg_stats"},{"description":"Walk the palace graph from a room. Shows connected ideas across wings — the tunnels. Like following a thread through the palace: start at 'chromadb-setup' in wing_code, discover it connects to wing_myproject (planning) and wing_user (feelings about it).","inputSchema":{"properties":{"max_hops":{"description":"How many connections to follow (default: 2)","type":"integer"},"start_room":{"description":"Room to start from (e.g. 'chromadb-setup', 'riley-school')","type":"string"}},"required":["start_room"],"type":"object"},"name":"mempalace_traverse"},{"description":"Find rooms that bridge two wings — the hallways connecting different domains. E.g. what topics connect wing_code to wing_team?","inputSchema":{"properties":{"wing_a":{"description":"First wing (optional)","type":"string"},"wing_b":{"description":"Second wing (optional)","type":"string"}},"type":"object"},"name":"mempalace_find_tunnels"},{"description":"Palace graph overview: total rooms, tunnel connections, edges between wings.","inputSchema":{"properties":{},"type":"object"},"name":"mempalace_graph_stats"},{"description":"Semantic search. Returns verbatim drawer content with similarity scores.","inputSchema":{"properties":{"limit":{"description":"Max results (default 5)","type":"integer"},"query":{"description":"What to search for","type":"string"},"room":{"description":"Filter by room (optional)","type":"string"},"wing":{"description":"Filter by wing (optional)","type":"string"}},"required":["query"],"type":"object"},"name":"mempalace_search"},{"description":"Check if content already exists in the palace before filing","inputSchema":{"properties":{"content":{"description":"Content to check","type":"string"},"threshold":{"description":"Similarity threshold 0-1 (default 0.9)","type":"number"}},"required":["content"],"type":"object"},"name":"mempalace_check_duplicate"},{"description":"File verbatim content into the palace. Checks for duplicates first.","inputSchema":{"properties":{"added_by":{"description":"Who is filing this (default: mcp)","type":"string"},"content":{"description":"Verbatim content to store — exact words, never summarized","type":"string"},"room":{"description":"Room (aspect: backend, decisions, meetings...)","type":"string"},"source_file":{"description":"Where this came from (optional)","type":"string"},"wing":{"description":"Wing (project name)","type":"string"}},"required":["wing","room","content"],"type":"object"},"name":"mempalace_add_drawer"},{"description":"Delete a drawer by ID. Irreversible.","inputSchema":{"properties":{"drawer_id":{"description":"ID of the drawer to delete","type":"string"}},"required":["drawer_id"],"type":"object"},"name":"mempalace_delete_drawer"},{"description":"Write to your personal agent diary in AAAK format. Your observations, thoughts, what you worked on, what matters. Each agent has their own diary with full history. Write in AAAK for compression — e.g. 'SESSION:2026-04-04|built.palace.graph+diary.tools|ALC.req:agent.diaries.in.aaak|★★★'. Use entity codes from the AAAK spec.","inputSchema":{"properties":{"agent_name":{"description":"Your name — each agent gets their own diary wing","type":"string"},"entry":{"description":"Your diary entry in AAAK format — compressed, entity-coded, emotion-marked","type":"string"},"topic":{"description":"Topic tag (optional, default: general)","type":"string"}},"required":["agent_name","entry"],"type":"object"},"name":"mempalace_diary_write"},{"description":"Read your recent diary entries (in AAAK). See what past versions of yourself recorded — your journal across sessions.","inputSchema":{"properties":{"agent_name":{"description":"Your name — each agent gets their own diary wing","type":"string"},"last_n":{"description":"Number of recent entries to read (default: 10)","type":"integer"}},"required":["agent_name"],"type":"object"},"name":"mempalace_diary_read"}]}}
+### MCP EXIT=0
+### MCP smoke OK
+################################################################
+DONE. Log: /mnt/d/SourceCode/mempalace/validation-logs/smoke.log

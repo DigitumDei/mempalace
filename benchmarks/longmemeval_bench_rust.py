@@ -23,6 +23,7 @@ Data:
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -50,12 +51,13 @@ def recall_at_k(ranked_ids, correct_ids, k):
 
 def ndcg_at_k(ranked_ids, correct_ids, k):
     """Normalized DCG at k."""
-    relevances = [1.0 if rid in correct_ids else 0.0 for rid in ranked_ids[:k]]
-    ideal = sorted(relevances, reverse=True)
+    correct = set(correct_ids)
+    relevances = [1.0 if rid in correct else 0.0 for rid in ranked_ids[:k]]
 
     def dcg(rels):
         return sum(r / math.log2(i + 2) for i, r in enumerate(rels))
 
+    ideal = [1.0] * min(len(correct), k)
     idcg = dcg(ideal)
     return dcg(relevances) / idcg if idcg > 0 else 0.0
 
@@ -131,8 +133,10 @@ def python_query(entry, n_results=10):
 
 
 def _safe_filename(session_id: str) -> str:
-    """Sanitize a session ID for use as a filename."""
-    return re.sub(r"[^\w\-]", "_", session_id) + ".txt"
+    """Sanitize a session ID for use as a filename without collisions."""
+    safe = re.sub(r"[^\w\-]", "_", session_id)[:32].strip("_") or "session"
+    digest = hashlib.md5(session_id.encode("utf-8")).hexdigest()[:8]
+    return f"{safe}_{digest}.txt"
 
 
 def rust_query(entry, rust_binary: str, n_results=10):
@@ -204,17 +208,29 @@ def rust_query(entry, rust_binary: str, n_results=10):
             return [], corpus_ids, ingest_secs, 0.0
         search_secs = time.perf_counter() - t1
 
-        # Parse "      Source: <filename>" lines from CLI output
+        # Parse result metadata from CLI output. Only accept Source lines in the
+        # fixed metadata position immediately after a result header, so session
+        # content containing "Source:" cannot be mistaken for a retrieval hit.
         ranked_ids = []
         seen = set()
+        expecting_source = False
         for line in result.stdout.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("Source:"):
+            if re.match(r"^\s+\[\d+\]\s+\S+\s+/\s+\S+\s*$", line):
+                expecting_source = True
+                continue
+
+            if expecting_source and line.startswith("      Source: "):
+                expecting_source = False
+                stripped = line.strip()
                 fname = stripped.split(":", 1)[1].strip()
                 sess_id = filename_to_id.get(fname)
                 if sess_id and sess_id not in seen:
                     ranked_ids.append(sess_id)
                     seen.add(sess_id)
+                continue
+
+            if line.strip():
+                expecting_source = False
 
         # Pad with unseen IDs
         for cid in corpus_ids:

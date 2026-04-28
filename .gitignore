@@ -9,3 +9,5 @@ mempal.yaml
 .cache/
 .claude/
 opencode.json
+artifacts/
+mempalace-rs/.cargo/

@@ -10,7 +10,7 @@ use mempalace_config::{ConfigLoader, LowCpuRuntimeConfig, MempalaceConfig};
 use mempalace_core::{DrawerId, DrawerRecord, EmbeddingProfile, RoomId, SearchQuery, WingId};
 use mempalace_embeddings::{
     EmbeddingError, EmbeddingProvider, EmbeddingRequest, FastembedProvider,
-    FastembedProviderConfig, StartupValidation, StartupValidationStatus,
+    FastembedProviderConfig, StartupValidation, StartupValidationStatus, env_flag,
 };
 use mempalace_graph::{
     AddFactRequest, EntityKind, KnowledgeGraphRuntime, PalaceGraphSnapshot, QueryDirection,
@@ -453,11 +453,12 @@ pub fn default_provider(profile: EmbeddingProfile) -> Result<FastembedProvider> 
         .unwrap_or_else(|| PathBuf::from(".cache"))
         .join("mempalace")
         .join("embeddings");
-    Ok(FastembedProvider::new(
-        profile,
-        FastembedProviderConfig::new(cache_root),
-    )
-    .try_initialize()?)
+    let mut config = FastembedProviderConfig::new(cache_root);
+    if env_flag("MEMPALACE_EMBED_ALLOW_DOWNLOADS") {
+        config.allow_downloads = true;
+        config.show_download_progress = true;
+    }
+    Ok(FastembedProvider::new(profile, config).try_initialize()?)
 }
 
 impl<P> McpServer<P>

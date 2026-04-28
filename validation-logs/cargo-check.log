@@ -1,0 +1,551 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling libc v0.2.185
+   Compiling libm v0.2.16
+   Compiling serde_core v1.0.228
+   Compiling zerocopy v0.8.48
+   Compiling serde v1.0.228
+   Compiling num-traits v0.2.19
+   Compiling zmij v1.0.21
+   Compiling serde_json v1.0.149
+   Compiling rustversion v1.0.22
+   Compiling getrandom v0.3.4
+   Compiling chrono-tz v0.10.4
+   Compiling ahash v0.8.12
+   Compiling crossbeam-utils v0.8.21
+   Compiling parking_lot_core v0.9.12
+   Compiling paste v1.0.15
+   Compiling thiserror v2.0.18
+   Compiling icu_normalizer_data v2.2.0
+   Compiling icu_properties_data v2.2.0
+   Compiling flatbuffers v25.12.19
+   Compiling crc32fast v1.5.0
+   Compiling object v0.37.3
+    Checking flate2 v1.1.9
+   Compiling snap v1.1.1
+   Compiling syn v2.0.117
+   Compiling jobserver v0.1.34
+    Checking getrandom v0.2.17
+    Checking errno v0.3.14
+    Checking socket2 v0.6.3
+    Checking mio v1.2.0
+   Compiling cc v1.2.60
+    Checking num-integer v0.1.46
+    Checking num-complex v0.4.6
+    Checking rand_core v0.9.5
+    Checking parking_lot v0.12.5
+    Checking signal-hook-registry v1.4.8
+    Checking atoi v2.0.0
+    Checking ordered-float v2.10.1
+    Checking num-bigint v0.4.6
+    Checking num-iter v0.1.45
+    Checking getrandom v0.4.2
+    Checking hashbrown v0.16.1
+    Checking csv v1.4.0
+    Checking thrift v0.17.0
+    Checking crossbeam-epoch v0.9.18
+    Checking tempfile v3.27.0
+   Compiling chrono v0.4.44
+   Compiling anyhow v1.0.102
+    Checking num-rational v0.4.2
+    Checking uuid v1.23.1
+   Compiling bigdecimal v0.4.10
+   Compiling generic-array v0.14.7
+   Compiling rayon-core v1.13.0
+    Checking num v0.4.3
+    Checking crossbeam-deque v0.8.6
+   Compiling ring v0.17.14
+   Compiling zstd-sys v2.0.16+zstd.1.5.7
+   Compiling stacker v0.1.23
+   Compiling bzip2-sys v0.1.13+1.0.8
+   Compiling ar_archive_writer v0.5.1
+   Compiling synstructure v0.13.2
+   Compiling lzma-sys v0.1.20
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+    Checking rayon v1.12.0
+    Checking crossbeam-channel v0.5.15
+    Checking digest v0.10.7
+   Compiling blake3 v1.8.4
+   Compiling psm v0.1.30
+    Checking deranged v0.5.8
+    Checking sha2 v0.10.9
+   Compiling portable-atomic v1.13.1
+   Compiling prettyplease v0.2.37
+    Checking md-5 v0.10.6
+    Checking blake2 v0.10.6
+    Checking num_cpus v1.17.0
+   Compiling zerocopy-derive v0.8.48
+   Compiling serde_derive v1.0.228
+   Compiling tokio-macros v2.7.0
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling strum_macros v0.26.4
+   Compiling zerovec-derive v0.11.3
+   Compiling displaydoc v0.2.5
+   Compiling thiserror-impl v2.0.18
+    Checking tokio v1.52.0
+   Compiling futures-macro v0.3.32
+   Compiling tracing-attributes v0.1.31
+    Checking zerofrom v0.1.7
+    Checking yoke v0.8.2
+    Checking zerovec v0.11.6
+    Checking zerotrie v0.2.4
+    Checking strum v0.26.3
+   Compiling async-trait v0.1.89
+   Compiling sqlparser_derive v0.3.0
+    Checking tinystr v0.8.3
+    Checking futures-util v0.3.32
+    Checking potential_utf v0.1.5
+    Checking icu_locale_core v2.2.0
+    Checking icu_collections v2.2.0
+    Checking tracing v0.1.44
+    Checking arrow-schema v56.2.0
+    Checking comfy-table v7.1.2
+    Checking icu_provider v2.2.0
+   Compiling recursive-proc-macro-impl v0.1.1
+    Checking icu_normalizer v2.2.0
+    Checking icu_properties v2.2.0
+   Compiling sqlparser v0.58.0
+    Checking ppv-lite86 v0.2.21
+    Checking half v2.7.1
+    Checking futures-executor v0.3.32
+    Checking recursive v0.1.1
+    Checking futures v0.3.32
+    Checking hashbrown v0.14.5
+    Checking rand_chacha v0.9.0
+    Checking arrow-buffer v56.2.0
+    Checking tokio-util v0.7.18
+    Checking idna_adapter v1.2.1
+    Checking rand v0.9.4
+    Checking idna v1.1.0
+    Checking arrow-data v56.2.0
+    Checking bzip2 v0.5.2
+   Compiling prost-derive v0.13.5
+    Checking twox-hash v2.1.2
+    Checking dashmap v6.1.0
+    Checking url v2.5.8
+    Checking lz4_flex v0.11.6
+    Checking time v0.3.47
+    Checking rustls-webpki v0.103.12
+    Checking object_store v0.12.5
+    Checking datafusion-common-runtime v50.3.0
+   Compiling rustls v0.23.38
+   Compiling heapless v0.8.0
+   Compiling prost v0.13.5
+    Checking concurrent-queue v2.5.0
+    Checking event-listener v5.4.1
+    Checking rstar v0.12.2
+   Compiling prost-types v0.13.5
+    Checking dirs-sys v0.5.0
+    Checking approx v0.5.1
+   Compiling syn v1.0.109
+    Checking dirs v6.0.0
+    Checking event-listener-strategy v0.5.4
+    Checking arrow-array v56.2.0
+    Checking ordered-float v5.3.0
+    Checking geo-types v0.7.19
+   Compiling httparse v1.10.1
+    Checking jsonb v0.5.6
+    Checking h2 v0.4.13
+   Compiling prost-build v0.13.5
+    Checking async-lock v3.4.2
+   Compiling snafu-derive v0.8.9
+   Compiling pin-project-internal v1.1.11
+    Checking arrow-select v56.2.0
+    Checking arrow-arith v56.2.0
+    Checking arrow-row v56.2.0
+    Checking arrow-cast v56.2.0
+    Checking arrow-ord v56.2.0
+    Checking arrow-string v56.2.0
+   Compiling deepsize_derive v0.1.2
+   Compiling thiserror-impl v1.0.69
+    Checking moka v0.12.15
+    Checking arrow-json v56.2.0
+    Checking arrow-csv v56.2.0
+   Compiling arrow-ipc v56.2.0
+   Compiling zstd-safe v7.2.4
+    Checking zstd v0.13.3
+    Checking lance-arrow v1.0.1
+    Checking xz2 v0.1.7
+    Checking async-compression v0.4.19
+    Checking deepsize v0.2.0
+    Checking snafu v0.8.9
+    Checking thiserror v1.0.69
+    Checking pin-project v1.1.11
+    Checking hyper v1.9.0
+    Checking geo-traits v0.3.0
+    Checking tokio-stream v0.1.18
+    Checking thread-tree v0.3.3
+    Checking matrixmultiply v0.3.10
+    Checking tower v0.5.3
+    Checking arrow v56.2.0
+    Checking parquet v56.2.0
+    Checking hyper-util v0.1.20
+   Compiling num_enum_derive v0.7.6
+    Checking tokio-rustls v0.26.4
+   Compiling darling_core v0.23.0
+    Checking i_float v1.15.0
+   Compiling crunchy v0.2.4
+    Checking i_shape v1.14.0
+    Checking tower-http v0.6.8
+    Checking serde_urlencoded v0.7.1
+   Compiling lz4-sys v1.11.1+lz4-1.10.0
+   Compiling datafusion-common v50.3.0
+    Checking hyper-rustls v0.27.9
+    Checking rand_core v0.6.4
+    Checking spade v2.15.1
+    Checking i_overlay v4.0.7
+    Checking earcutr v0.4.3
+    Checking reqwest v0.12.28
+    Checking rand_chacha v0.3.1
+    Checking num_enum v0.7.6
+    Checking wkb v0.9.2
+    Checking wkt v0.14.0
+    Checking geoarrow-schema v0.6.2
+    Checking mempalace-core v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-core)
+   Compiling darling_macro v0.23.0
+   Compiling serde_repr v0.1.20
+    Checking geographiclib-rs v0.2.7
+    Checking tantivy-common v0.9.0
+    Checking geo v0.31.0
+    Checking geoarrow-array v0.6.2
+    Checking bitpacking v0.9.3
+    Checking rand v0.8.5
+   Compiling lance-encoding v1.0.1
+    Checking lance-namespace-reqwest-client v0.0.18
+    Checking hyperloglogplus v0.4.1
+   Compiling darling v0.23.0
+    Checking path_abs v0.5.1
+    Checking rand_distr v0.4.3
+   Compiling lance-file v1.0.1
+    Checking fsst v1.0.1
+    Checking geohash v0.13.1
+    Checking shellexpand v3.1.2
+   Compiling datafusion-expr-common v50.3.0
+   Compiling async-recursion v1.1.1
+    Checking lance-bitpacking v1.0.1
+    Checking geoarrow-expr-geo v0.6.2
+   Compiling radium v0.7.0
+   Compiling datafusion-physical-expr-common v50.3.0
+    Checking tantivy-stacker v0.5.0
+   Compiling darling_core v0.20.11
+   Compiling datafusion-functions-aggregate-common v50.3.0
+   Compiling datafusion-functions-window-common v50.3.0
+   Compiling bon-macros v3.9.1
+   Compiling lance-table v1.0.1
+    Checking random_word v0.5.2
+   Compiling lance-linalg v1.0.1
+   Compiling datafusion-expr v50.3.0
+    Checking tantivy-bitpacker v0.8.0
+    Checking tantivy-sstable v0.5.0
+    Checking rand_xoshiro v0.7.0
+   Compiling fst v0.4.7
+   Compiling socks v0.3.4
+   Compiling darling_macro v0.20.11
+    Checking lance-datagen v1.0.1
+   Compiling ureq-proto v0.6.0
+    Checking tantivy-columnar v0.5.0
+    Checking tantivy-query-grammar v0.24.0
+   Compiling lance-index v1.0.1
+    Checking tantivy-tokenizer-api v0.5.0
+    Checking sketches-ddsketch v0.3.1
+    Checking rust-stemmers v1.2.0
+    Checking arc-swap v1.9.1
+    Checking memmap2 v0.9.10
+    Checking bitvec v1.0.1
+   Compiling darling v0.20.11
+    Checking ndarray v0.16.1
+    Checking async-channel v2.5.0
+    Checking rand_distr v0.5.1
+   Compiling onig_sys v69.9.1
+    Checking crossbeam-queue v0.3.12
+   Compiling libsqlite3-sys v0.37.0
+    Checking lz4 v1.28.1
+   Compiling derive_builder_core v0.20.2
+    Checking bon v3.9.1
+   Compiling esaxx-rs v0.1.10
+   Compiling serde_with_macros v3.18.0
+    Checking tantivy v0.24.2
+   Compiling monostate-impl v0.1.18
+    Checking castaway v0.2.4
+    Checking console v0.15.11
+    Checking spm_precompiled v0.1.4
+    Checking indicatif v0.17.11
+    Checking macro_rules_attribute v0.2.2
+   Compiling derive_builder_macro v0.20.2
+    Checking monostate v0.1.18
+    Checking compact_str v0.9.0
+    Checking ureq v2.12.1
+    Checking ndarray v0.17.2
+    Checking lance-testing v1.0.1
+   Compiling ureq v3.3.0
+    Checking serde_with v3.18.0
+    Checking dary_heap v0.3.8
+    Checking derive_builder v0.20.2
+    Checking rayon-cond v0.4.0
+    Checking hashlink v0.11.0
+    Checking hf-hub v0.4.3
+    Checking safetensors v0.7.0
+    Checking serde_spanned v1.1.1
+    Checking toml_datetime v0.7.5+spec-1.1.0
+    Checking serde_yaml v0.9.34+deprecated
+    Checking toml v0.9.12+spec-1.1.0
+    Checking mempalace-dialect v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-dialect)
+   Compiling clap_derive v4.6.1
+    Checking tracing-subscriber v0.3.23
+   Compiling ort-sys v2.0.0-rc.11
+    Checking mempalace-import v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-import)
+    Checking mempalace-config v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-config)
+    Checking datafusion-sql v50.3.0
+    Checking datafusion-physical-expr v50.3.0
+    Checking datafusion-execution v50.3.0
+   Compiling datafusion-macros v50.3.0
+    Checking clap v4.6.1
+    Checking ort v2.0.0-rc.11
+    Checking datafusion-physical-plan v50.3.0
+    Checking datafusion-optimizer v50.3.0
+    Checking lance-core v1.0.1
+    Checking rusqlite v0.39.0
+    Checking onig v6.5.1
+    Checking tokenizers v0.22.2
+    Checking lance-namespace v1.0.1
+    Checking datafusion-functions v50.3.0
+    Checking datafusion-functions-aggregate v50.3.0
+    Checking datafusion-functions-window v50.3.0
+    Checking lance-io v1.0.1
+    Checking datafusion-session v50.3.0
+    Checking fastembed v5.13.2
+    Checking datafusion-physical-expr-adapter v50.3.0
+    Checking datafusion-functions-nested v50.3.0
+    Checking mempalace-embeddings v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-embeddings)
+    Checking datafusion-datasource v50.3.0
+crates/mempalace-embeddings/src/lib.rs:162:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:163:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:164:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:165:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:178:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:239:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:240:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:241:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:258:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:259:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:260:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:261:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:681:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:683:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:685:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:685:22: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:687:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:687:22: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:687:40: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:689:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:689:15: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:689:33: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:691:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:692:9: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:694:9: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:697:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:697:25: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:697:42: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:699:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:701:5: warning: missing documentation for a variant
+warning: `mempalace-embeddings` (lib) generated 30 warnings
+warning: `mempalace-embeddings` (lib test) generated 30 warnings (30 duplicates)
+crates/mempalace-embeddings/examples/embedding_bench.rs:1:1: warning: missing documentation for the crate
+warning: `mempalace-embeddings` (example "embedding_bench") generated 1 warning
+    Checking datafusion-catalog v50.3.0
+    Checking datafusion-pruning v50.3.0
+    Checking datafusion-physical-optimizer v50.3.0
+    Checking datafusion-datasource-csv v50.3.0
+    Checking datafusion-functions-table v50.3.0
+    Checking datafusion-datasource-json v50.3.0
+    Checking datafusion-catalog-listing v50.3.0
+    Checking datafusion-datasource-parquet v50.3.0
+    Checking datafusion v50.3.0
+    Checking geodatafusion v0.1.1
+    Checking lance-geo v1.0.1
+    Checking lance-datafusion v1.0.1
+    Checking lance v1.0.1
+    Checking lance-namespace-impls v1.0.1
+    Checking lancedb v0.23.1
+    Checking mempalace-storage v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-storage)
+crates/mempalace-storage/src/engine.rs:10:32: warning: unused import: `DuplicateStrategy`
+crates/mempalace-storage/src/lance.rs:6:12: warning: unused import: `ArrayRef`
+crates/mempalace-storage/src/engine.rs:17:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/engine.rs:25:5: warning: missing documentation for an associated function
+crates/mempalace-storage/src/engine.rs:40:5: warning: missing documentation for a method
+crates/mempalace-storage/src/engine.rs:44:5: warning: missing documentation for a method
+crates/mempalace-storage/src/engine.rs:48:5: warning: missing documentation for a method
+crates/mempalace-storage/src/engine.rs:52:5: warning: missing documentation for a method
+crates/mempalace-storage/src/engine.rs:99:5: warning: missing documentation for a method
+crates/mempalace-storage/src/error.rs:5:1: warning: missing documentation for a type alias
+crates/mempalace-storage/src/error.rs:8:1: warning: missing documentation for an enum
+crates/mempalace-storage/src/error.rs:10:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:12:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:14:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:16:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:18:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:20:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:22:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:23:9: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:25:9: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:28:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:28:21: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:28:43: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:30:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:34:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/error.rs:34:34: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:34:53: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:34:70: warning: missing documentation for a struct field
+crates/mempalace-storage/src/error.rs:36:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/lance.rs:28:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/lance.rs:34:5: warning: missing documentation for an associated function
+crates/mempalace-storage/src/lance.rs:38:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:131:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/sqlite.rs:132:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:133:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:140:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:149:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:150:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:151:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:152:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:153:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:156:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/sqlite.rs:157:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:158:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:159:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:160:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:163:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/sqlite.rs:164:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:165:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:168:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/sqlite.rs:169:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:170:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:171:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:172:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:173:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:174:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:180:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:190:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/sqlite.rs:191:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:192:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:193:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:194:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:198:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/sqlite.rs:203:5: warning: missing documentation for an associated function
+crates/mempalace-storage/src/sqlite.rs:207:5: warning: missing documentation for an associated function
+crates/mempalace-storage/src/sqlite.rs:216:5: warning: missing documentation for a method
+crates/mempalace-storage/src/sqlite.rs:220:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:13:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:14:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:15:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:16:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:20:5: warning: missing documentation for an associated function
+crates/mempalace-storage/src/types.rs:27:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:28:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:29:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:30:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:31:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:32:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:36:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:37:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:38:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:39:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:40:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:44:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:45:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:46:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:50:1: warning: missing documentation for an enum
+crates/mempalace-storage/src/types.rs:51:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:52:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:53:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:58:1: warning: missing documentation for an enum
+crates/mempalace-storage/src/types.rs:59:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:60:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:61:5: warning: missing documentation for a variant
+crates/mempalace-storage/src/types.rs:65:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:75:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:76:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:77:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:78:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:79:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:80:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:81:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:82:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:86:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:87:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:88:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:89:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:90:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:91:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:95:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:96:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:97:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:98:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:99:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:100:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:101:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:105:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:106:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:107:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:111:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:112:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:113:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:114:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:115:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:116:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:117:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:121:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:122:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:123:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:124:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:125:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:129:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:130:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:131:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:132:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:136:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:137:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:138:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:139:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:140:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:142:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:144:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:145:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:146:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:147:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:148:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:149:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:153:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:154:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:155:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:159:1: warning: missing documentation for a struct
+crates/mempalace-storage/src/types.rs:160:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:161:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:162:5: warning: missing documentation for a struct field
+crates/mempalace-storage/src/types.rs:166:1: warning: missing documentation for a trait
+crates/mempalace-storage/src/types.rs:167:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:168:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:173:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:174:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:175:5: warning: missing documentation for a method
+crates/mempalace-storage/src/types.rs:176:5: warning: missing documentation for a method
+warning: `mempalace-storage` (lib) generated 161 warnings (2 duplicates)
+    Checking mempalace-search v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-search)
+    Checking mempalace-graph v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-graph)
+    Checking mempalace-ingest v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-ingest)
+warning: `mempalace-storage` (lib test) generated 161 warnings (159 duplicates) (run `cargo fix --lib -p mempalace-storage --tests` to apply 2 suggestions)
+crates/mempalace-ingest/src/lib.rs:14:5: warning: unused import: `DrawerFilter`
+warning: `mempalace-ingest` (lib) generated 1 warning (run `cargo fix --lib -p mempalace-ingest` to apply 1 suggestion)
+    Checking mempalace-cli v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-cli)
+    Checking mempalace-mcp v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-mcp)
+crates/mempalace-mcp/src/lib.rs:9:38: warning: unused import: `LowCpuRuntimeConfig`
+crates/mempalace-cli/src/main.rs:574:9: warning: variable does not need to be mutable
+crates/mempalace-cli/src/main.rs:286:4: warning: function `run_cli` is never used
+warning: `mempalace-cli` (bin "mempalace-cli") generated 2 warnings (run `cargo fix --bin "mempalace-cli" -p mempalace-cli` to apply 1 suggestion)
+warning: `mempalace-cli` (bin "mempalace-cli" test) generated 1 warning (1 duplicate)
+warning: `mempalace-mcp` (lib) generated 1 warning (run `cargo fix --lib -p mempalace-mcp` to apply 1 suggestion)
+crates/mempalace-mcp/tests/stdio_harness.rs:1:1: warning: missing documentation for the crate
+warning: `mempalace-mcp` (test "stdio_harness") generated 1 warning
+    Finished `dev` profile [unoptimized] target(s) in 2m 47s

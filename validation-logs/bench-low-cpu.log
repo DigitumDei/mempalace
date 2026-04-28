@@ -1,0 +1,69 @@
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling ring v0.17.14
+   Compiling zerocopy v0.8.48
+   Compiling num-traits v0.2.19
+   Compiling matrixmultiply v0.3.10
+   Compiling num-complex v0.4.6
+   Compiling num-integer v0.1.46
+   Compiling ndarray v0.17.2
+   Compiling serde_json v1.0.149
+   Compiling deranged v0.5.8
+   Compiling monostate v0.1.18
+   Compiling hashbrown v0.16.1
+   Compiling dary_heap v0.3.8
+   Compiling compact_str v0.9.0
+   Compiling spm_precompiled v0.1.4
+   Compiling safetensors v0.7.0
+   Compiling time v0.3.47
+   Compiling ppv-lite86 v0.2.21
+   Compiling ahash v0.8.12
+   Compiling rand_chacha v0.9.0
+   Compiling rand v0.9.4
+   Compiling rustls v0.23.38
+   Compiling tokenizers v0.22.2
+   Compiling mempalace-core v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-core)
+   Compiling rustls-webpki v0.103.12
+   Compiling ureq v3.3.0
+   Compiling ort-sys v2.0.0-rc.11
+   Compiling ort v2.0.0-rc.11
+   Compiling ureq v2.12.1
+   Compiling hf-hub v0.4.3
+   Compiling fastembed v5.13.2
+   Compiling mempalace-embeddings v0.1.0 (/mnt/d/SourceCode/mempalace/mempalace-rs/crates/mempalace-embeddings)
+crates/mempalace-embeddings/src/lib.rs:162:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:163:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:164:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:165:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:178:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:239:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:240:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:241:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:258:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:259:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:260:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:261:5: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:681:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:683:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:685:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:685:22: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:687:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:687:22: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:687:40: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:689:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:689:15: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:689:33: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:691:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:692:9: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:694:9: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:697:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:697:25: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:697:42: warning: missing documentation for a struct field
+crates/mempalace-embeddings/src/lib.rs:699:5: warning: missing documentation for a variant
+crates/mempalace-embeddings/src/lib.rs:701:5: warning: missing documentation for a variant
+warning: `mempalace-embeddings` (lib) generated 30 warnings
+crates/mempalace-embeddings/examples/embedding_bench.rs:1:1: warning: missing documentation for the crate
+warning: `mempalace-embeddings` (example "embedding_bench") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 43.18s
+     Running `target/release/examples/embedding_bench`
+profile=low_cpu p95_ms=14.92

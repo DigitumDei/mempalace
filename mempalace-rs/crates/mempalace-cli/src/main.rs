@@ -11,7 +11,7 @@ use mempalace_config::{
 };
 use mempalace_core::{EmbeddingProfile, RoomId, SearchQuery, WingId};
 use mempalace_embeddings::{
-    EmbeddingProvider, FastembedProvider, FastembedProviderConfig, log_startup_validation,
+    EmbeddingProvider, FastembedProvider, FastembedProviderConfig, env_flag, log_startup_validation,
 };
 use mempalace_ingest::{
     ConversationExtractMode, ConversationIngestRequest, IngestSummary, ProjectIngestRequest,
@@ -999,15 +999,23 @@ fn fastembed_provider(
     profile: EmbeddingProfile,
     cache_root: PathBuf,
 ) -> Result<FastembedProvider, Box<dyn std::error::Error>> {
-    Ok(FastembedProvider::new(profile, FastembedProviderConfig::new(cache_root))
-        .try_initialize()?)
+    Ok(FastembedProvider::new(profile, fastembed_provider_config(cache_root)).try_initialize()?)
 }
 
 fn fastembed_validation_provider(
     profile: EmbeddingProfile,
     cache_root: PathBuf,
 ) -> Result<FastembedProvider, Box<dyn std::error::Error>> {
-    Ok(FastembedProvider::new(profile, FastembedProviderConfig::new(cache_root)))
+    Ok(FastembedProvider::new(profile, fastembed_provider_config(cache_root)))
+}
+
+fn fastembed_provider_config(cache_root: PathBuf) -> FastembedProviderConfig {
+    let mut config = FastembedProviderConfig::new(cache_root);
+    if env_flag("MEMPALACE_EMBED_ALLOW_DOWNLOADS") {
+        config.allow_downloads = true;
+        config.show_download_progress = true;
+    }
+    config
 }
 
 fn config_error(error: mempalace_core::MempalaceError) -> clap::Error {
