@@ -1,0 +1,1 @@
+{"correct_ids":["sess_python"],"idx":0,"ingest_ms":78,"ndcg":1.0,"question_id":1,"question_type":"single_session","r10":1.0,"r5":1.0,"ranked_ids":["sess_python","sess_cooking","sess_weather"],"search_ms":26}
